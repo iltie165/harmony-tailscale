@@ -1,2 +1,7 @@
 /dist/
 /.cache/
+/.hvigor/
+/entry/.cxx/
+/entry/build/
+/entry/libs/
+/entry/src/main/cpp/include/

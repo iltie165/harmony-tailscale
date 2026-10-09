@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "2.0.0",
+  "description": "Tailscale HarmonyOS runtime probe entry module",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {}
+}

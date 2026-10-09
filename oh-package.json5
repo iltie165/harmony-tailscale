@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.0.0",
+  "name": "harmony-tailscale-probe",
+  "version": "2.0.0",
+  "description": "HarmonyOS Stage application for Tailscale Go runtime validation",
+  "dependencies": {},
+  "devDependencies": {}
+}

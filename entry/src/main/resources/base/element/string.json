@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Tailscale Go runtime validation"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Tailscale runtime probe"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Tailscale Probe"
+    }
+  ]
+}

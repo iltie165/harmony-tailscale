@@ -3,14 +3,19 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_GO_IMAGE:-harmonyos-go:1.24}
+proxy=${HARMONY_PROXY_URL:-http://127.0.0.1:7890}
+all_proxy=${HARMONY_ALL_PROXY_URL:-socks5://127.0.0.1:7890}
 library="$project_root/dist/libtailscale_ohos.so"
 header="$project_root/dist/libtailscale_ohos.h"
 
 [[ -f "$library" ]] || { echo "missing $library" >&2; exit 1; }
 [[ -f "$header" ]] || { echo "missing $header" >&2; exit 1; }
 
-docker run --rm --network none \
+docker run --rm --network host \
   -v "$project_root:/workspace:ro" \
+  -e HTTP_PROXY="$proxy" \
+  -e HTTPS_PROXY="$proxy" \
+  -e ALL_PROXY="$all_proxy" \
   -w /workspace \
   "$image" bash -lc '
     set -euo pipefail
@@ -27,6 +32,11 @@ docker run --rm --network none \
       tailscale_ohos_version \
       tailscale_ohos_go_version \
       tailscale_ohos_core_probe \
+      tailscale_ohos_start \
+      tailscale_ohos_status \
+      tailscale_ohos_close \
+      tailscale_ohos_diagnostics \
+      tailscale_ohos_logs \
       tailscale_ohos_string_free; do
       grep -Eq "[[:space:]]${symbol}$" /tmp/elf-symbols.txt
     done
