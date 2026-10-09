@@ -67,6 +67,15 @@ The HAP build verifies that both native libraries are packaged as AArch64,
 that the NAPI library depends on `libtailscale_ohos.so`, that the Go start
 symbol is exported, and that no `R_AARCH64_TLS_TPREL64` relocation is present.
 
-The generated HAP is unsigned. Device installation requires a developer
-signature/profile valid for the target device. See
+Sign the generated HAP with the device-valid profile under
+`/home/zackli/harmony-signing` without storing passwords in the repository:
+
+```bash
+export HARMONY_KEYSTORE_PASSWORD='...'
+# Set HARMONY_KEY_PASSWORD only when it differs from the keystore password.
+./scripts/sign-hap.sh
+unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
+```
+
+The result is `dist/hap/tailscale-probe-signed.hap`. See
 [`docs/device-test.md`](docs/device-test.md) for deployment and log capture.

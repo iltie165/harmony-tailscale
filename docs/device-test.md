@@ -2,22 +2,34 @@
 
 ## Current status
 
-The project produces a statically verified **unsigned** HAP. At the time of
-this report, `hdc list targets` returned `[Empty]`; consequently no real-device
-load/start logs exist yet.
+The project produces a signed, statically verified HAP at
+`dist/hap/tailscale-probe-signed.hap`. `hap-sign-tool verify-app` reports
+`Verify success`, including successful code-sign verification for all three
+packaged native libraries. At the time of this report, `hdc list targets`
+returned `[Empty]`; consequently no real-device load/start logs exist yet.
 
 ## Prerequisites
 
 1. Enable Developer Mode and USB debugging on the HarmonyOS device.
 2. Connect it to the Ubuntu host and authorize the host on the device.
-3. Sign `dist/hap/tailscale-probe-unsigned.hap` using DevEco Studio automatic
-   signing or a developer certificate/profile that includes this device and the
-   bundle ID `com.ezoo.tailscaleprobe`.
-4. Save the result as `dist/hap/tailscale-probe-signed.hap`, or pass its path to
-   the test script.
+3. Export the P12 password only for the signing command, then sign:
 
-The repository intentionally contains no certificate, private key, profile, or
-auth key.
+   ```bash
+   export HARMONY_KEYSTORE_PASSWORD='...'
+   # Only if the private-key password differs:
+   # export HARMONY_KEY_PASSWORD='...'
+   ./scripts/sign-hap.sh
+   unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
+   ```
+
+   The script validates that the signed profile is for
+   `com.ezoo.tailscaleprobe`, uses the complete certificate chain from
+   `lch-phone.cer`, signs with `debug.p12`, verifies the result with
+   `hap-sign-tool`, and writes `dist/hap/tailscale-probe-signed.hap`.
+
+The repository intentionally contains no certificate, private key, profile,
+password, or auth key. Signing inputs remain outside the repository in
+`/home/zackli/harmony-signing`.
 
 ## Confirm device visibility
 
