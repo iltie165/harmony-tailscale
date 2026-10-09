@@ -10,6 +10,7 @@ profile=${HARMONY_PROFILE_FILE:-$signing_dir/tailscala-hos-debug.p7b}
 unsigned_hap=${1:-$project_root/dist/hap/tailscale-probe-unsigned.hap}
 signed_hap=${2:-$project_root/dist/hap/tailscale-probe-signed.hap}
 bundle_name=com.ezoo.tailscaleprobe
+compatible_api=${HARMONY_COMPATIBLE_API:-24}
 
 : "${HARMONY_KEYSTORE_PASSWORD:?set HARMONY_KEYSTORE_PASSWORD without writing it to a file}"
 key_password=${HARMONY_KEY_PASSWORD:-$HARMONY_KEYSTORE_PASSWORD}
@@ -44,6 +45,7 @@ docker run --rm \
   -e HARMONY_KEYSTORE_PASSWORD \
   -e HARMONY_KEY_PASSWORD="$key_password" \
   -e HARMONY_KEY_ALIAS="$key_alias" \
+  -e HARMONY_COMPATIBLE_API="$compatible_api" \
   -e HARMONY_OUTPUT_NAME="$(basename "$signed_hap")" \
   -v "$keystore:/signing/debug.p12:ro" \
   -v "$app_cert:/signing/app-cert-chain.cer:ro" \
@@ -78,7 +80,7 @@ docker run --rm \
       -keystoreFile /signing/debug.p12 \
       -keystorePwd "$HARMONY_KEYSTORE_PASSWORD" \
       -outFile "/output/$HARMONY_OUTPUT_NAME" \
-      -compatibleVersion 26 \
+      -compatibleVersion "$HARMONY_COMPATIBLE_API" \
       -signCode 1
 
     java -jar "$sign_tool" verify-app \

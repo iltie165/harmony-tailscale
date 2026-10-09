@@ -60,8 +60,9 @@ monitoring, DNS integration, background execution, and VPN Extension wiring.
 
 ## Phase 2 build status
 
-The minimal Stage-model HAP now compiles and packages successfully with API
-26 / Hvigor 6.26.8.
+The minimal Stage-model HAP now compiles and packages successfully with the
+HarmonyOS API 26 SDK / Hvigor 6.26.8. It targets API 26 while declaring
+`compatibleSdkVersion: 6.1.1(24)` for the API 24 test device.
 
 - ArkTS calls the native module `libtailscale_napi.so`.
 - Potentially blocking Go operations run through `napi_create_async_work` and
@@ -87,7 +88,8 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 26,990,713 bytes | `81a91190dc6ff09a86b341432d9321f4021fd62522a6cf1555f47ef1d7c48618` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 26,990,868 bytes | `c6b872abee88030313112c4424fdbf4e14ec3e8b80b92c498fd6bdcd4ee90f14` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,278,004 bytes | `5d88ea39f4a546ee721faafc93d879fea8b0da55a1385f0737c2e59b5e70a174` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
@@ -95,8 +97,9 @@ images were modified.
 
 ### Device verification boundary
 
-No HarmonyOS device was visible to `hdc` during this build (`[Empty]`), and no
-device-valid signing profile was available. Therefore the following remain
+No HarmonyOS device was visible to `hdc` during this build (`[Empty]`). A
+device-bound debug profile was used to sign the HAP, and `hap-sign-tool`
+reported `Verify success`, but installation and runtime behavior remain
 explicitly unverified and must not be inferred from the successful HAP build:
 
 - dynamic loading by the real device linker;

@@ -15,6 +15,7 @@ cp "$project_root/dist/libtailscale_ohos.so" "$native_lib_dir/libtailscale_ohos.
 cp "$project_root/dist/libtailscale_ohos.h" "$native_include_dir/libtailscale_ohos.h"
 
 docker run --rm --network host \
+  -e DEVECO_SDK_HOME=/opt/harmony/command-line-tools/sdk \
   -e HTTP_PROXY="$proxy" \
   -e HTTPS_PROXY="$proxy" \
   -e ALL_PROXY="$all_proxy" \
