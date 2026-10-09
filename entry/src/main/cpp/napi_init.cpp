@@ -103,15 +103,16 @@ void LogLine(const std::string &line)
 void ForwardGoLogs()
 {
     const std::string text = TakeGoString(tailscale_ohos_logs());
+    constexpr size_t MAX_FORWARDED_BYTES = 15000;
     size_t begin = 0;
-    while (begin < text.size()) {
-        const size_t end = text.find('\n', begin);
-        LogLine(text.substr(begin, end == std::string::npos ? std::string::npos : end - begin));
-        if (end == std::string::npos) {
-            break;
+    if (text.size() > MAX_FORWARDED_BYTES) {
+        begin = text.size() - MAX_FORWARDED_BYTES;
+        const size_t nextLine = text.find('\n', begin);
+        if (nextLine != std::string::npos) {
+            begin = nextLine + 1;
         }
-        begin = end + 1;
     }
+    LogLine("Go log tail (newest retained):\n" + text.substr(begin));
 }
 
 const char *OperationName(AsyncOperation operation)

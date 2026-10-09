@@ -3,7 +3,7 @@
 ## Current status
 
 The project produces a signed, statically verified HAP at
-`dist/hap/tailscale-probe-signed.hap`. Version 3.0.2 adds official interactive
+`dist/hap/tailscale-probe-signed.hap`. Version 3.0.3 adds official interactive
 login, control status/logout, and online peer listing. Phase 2 was proven on a
 HarmonyOS 6.1.1/API 24 device; the new Phase 3 login functions still require a
 fresh real-device run.
@@ -74,8 +74,9 @@ this phase. The app-private state directory is selected automatically.
 7. **List online machines** — leave the filter blank for all visible online
    peers, use `tag:server` for an ACL tag, or `user:name` for a user identity.
    A `group:name` filter must return the explicit management-OAuth limitation.
-8. **Read Go logs** — displays the same Go/Tailscale log buffer forwarded to
-   HiLog.
+8. **Read Go logs** — displays the complete Go/Tailscale log buffer in the UI;
+   the NAPI bridge forwards only its newest 15 KB to HiLog in a few chunks so
+   HarmonyOS logging rate limits do not discard the login failure at the end.
 9. **Logout from Tailscale** — verifies control-plane logout when explicitly
    intended; this clears the node login state.
 10. **Close tsnet** — clean shutdown after the evidence has been captured.
