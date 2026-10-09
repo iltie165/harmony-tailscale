@@ -65,9 +65,10 @@ HarmonyOS API 26 SDK / Hvigor 6.26.8. It targets API 26 while declaring
 `compatibleSdkVersion: 6.1.1(24)` for the API 24 test device.
 
 - ArkTS calls the native module `libtailscale_napi.so`.
-- Native declarations live under `cpp/types/libtailscale_napi/index.d.ts`, and
-  ArkTS uses named native imports to avoid the API 24 default-import binding
-  resolving to `undefined`.
+- Native declarations live under `cpp/types/libtailscale_napi/index.d.ts` and
+  contain named function declarations. ArkTS uses HarmonyOS's Native-module
+  default import adaptation; declaring a normal ES `export default` produced
+  `undefined`, while direct named imports caused an API 24 `SyntaxError`.
 - Potentially blocking Go operations run through `napi_create_async_work` and
   never execute on the ArkUI thread.
 - `tsnet.Server` receives the explicit app-private state directory and UI
@@ -91,8 +92,8 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 26,990,816 bytes | `dc5202c1386b73aa62417f566f929d8114e004f7b46fa4b066c5f10c115d315e` |
-| `dist/hap/tailscale-probe-signed.hap` | 27,278,057 bytes | `872f0f0135b2ba75828ac64276dc663f0b52c7cb5650804b891e776977a30def` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 26,990,868 bytes | `ee0648da5feab84e9f4b00b0a8e9134111d2b9ef468b4b3d2bf667c1036c33f7` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,278,003 bytes | `9abe72234740072dbc703dbae869f613324e8c75217e5fc9da6e70e9b73c049e` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
