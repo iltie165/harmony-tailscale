@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import tailscale from 'libtailscale_napi.so';
+import { close, diagnostics, getLogs, getVersion, start } from 'libtailscale_napi.so';
 
 const DOMAIN: number = 0x5453;
 const TAG: string = 'TailscaleProbe';
@@ -29,7 +29,7 @@ struct Index {
 
   private showVersion(): void {
     try {
-      const result: string = tailscale.getVersion();
+      const result: string = getVersion();
       this.output = this.formatJSON(result);
       hilog.info(DOMAIN, TAG, 'version=%{public}s', result);
     } catch (error) {
@@ -41,7 +41,7 @@ struct Index {
   private async runDiagnostics(): Promise<void> {
     this.busy = true;
     try {
-      const result: string = await tailscale.diagnostics(this.dataDir);
+      const result: string = await diagnostics(this.dataDir);
       this.output = this.formatJSON(result);
     } catch (error) {
       this.output = `Diagnostics failed: ${error}`;
@@ -54,7 +54,7 @@ struct Index {
     this.busy = true;
     this.output = `Starting tsnet on worker thread...\nDir: ${this.dataDir}`;
     try {
-      const result: string = await tailscale.start(this.dataDir, this.hostname);
+      const result: string = await start(this.dataDir, this.hostname);
       this.output = this.formatJSON(result);
     } catch (error) {
       this.output = `tsnet.Start failed: ${error}`;
@@ -66,7 +66,7 @@ struct Index {
   private async closeTsnet(): Promise<void> {
     this.busy = true;
     try {
-      const result: string = await tailscale.close();
+      const result: string = await close();
       this.output = this.formatJSON(result);
     } catch (error) {
       this.output = `tsnet.Close failed: ${error}`;
@@ -77,7 +77,7 @@ struct Index {
 
   private showLogs(): void {
     try {
-      this.output = tailscale.getLogs();
+      this.output = getLogs();
     } catch (error) {
       this.output = `Log query failed: ${error}`;
     }

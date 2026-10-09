@@ -51,6 +51,10 @@ cd /home/zackli/work/harmony-develop/harmony-tailscale
 
 In the application, press these buttons in order:
 
+The hostname field can be left at its default `harmony-tsnet`. It accepts only
+ASCII letters, digits, and hyphens (1-63 characters); no auth key is entered in
+this phase. The app-private state directory is selected automatically.
+
 1. **Query native versions** — must report ABI 2, Tailscale 1.86.2, the Go
    version, and `coreProbe: true`.
 2. **Run platform diagnostics** — records storage, TCP, UDP, DNS, interfaces,
