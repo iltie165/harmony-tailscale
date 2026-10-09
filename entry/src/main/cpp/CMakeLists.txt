@@ -6,9 +6,13 @@ set(TAILSCALE_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH}")
 add_library(tailscale_ohos SHARED IMPORTED)
 set_target_properties(tailscale_ohos PROPERTIES
   IMPORTED_LOCATION "${TAILSCALE_LIB_DIR}/libtailscale_ohos.so"
+  IMPORTED_NO_SONAME TRUE
 )
 
 add_library(tailscale_napi SHARED napi_init.cpp)
+set_target_properties(tailscale_napi PROPERTIES
+  SKIP_BUILD_RPATH TRUE
+)
 target_include_directories(tailscale_napi PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
