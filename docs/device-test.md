@@ -3,10 +3,10 @@
 ## Current status
 
 The project produces a signed, statically verified HAP at
-`dist/hap/tailscale-probe-signed.hap`. `hap-sign-tool verify-app` reports
-`Verify success`, including successful code-sign verification for all three
-packaged native libraries. At the time of this report, `hdc list targets`
-returned `[Empty]`; consequently no real-device load/start logs exist yet.
+`dist/hap/tailscale-probe-signed.hap`. Version 3.0.0 adds official interactive
+login, control status/logout, and online peer listing. Phase 2 was proven on a
+HarmonyOS 6.1.1/API 24 device; the new Phase 3 login functions still require a
+fresh real-device run.
 
 ## Prerequisites
 
@@ -55,15 +55,24 @@ The hostname field can be left at its default `harmony-tsnet`. It accepts only
 ASCII letters, digits, and hyphens (1-63 characters); no auth key is entered in
 this phase. The app-private state directory is selected automatically.
 
-1. **Query native versions** — must report ABI 2, Tailscale 1.86.2, the Go
+1. **Query native versions** — must report ABI 3, Tailscale 1.86.2, the Go
    version, and `coreProbe: true`.
 2. **Run platform diagnostics** — records storage, TCP, UDP, DNS, interfaces,
    polling network monitor, and default-route results.
 3. **Start tsnet asynchronously** — must leave ArkUI responsive and return
    either `state: started` or a concrete Go error/panic.
-4. **Read Go logs** — displays the same Go/Tailscale log buffer forwarded to
+4. **Login with official Tailscale** — opens the short-lived authentication URL
+   in the system browser. Complete login and return to the app.
+5. **Refresh control status** — must progress to `backendState: Running`, show
+   at least one Tailscale IP, and identify the current tailnet.
+6. **List online machines** — leave the filter blank for all visible online
+   peers, use `tag:server` for an ACL tag, or `user:name` for a user identity.
+   A `group:name` filter must return the explicit management-OAuth limitation.
+7. **Read Go logs** — displays the same Go/Tailscale log buffer forwarded to
    HiLog.
-5. **Close tsnet** — clean shutdown after the evidence has been captured.
+8. **Logout from Tailscale** — verifies control-plane logout when explicitly
+   intended; this clears the node login state.
+9. **Close tsnet** — clean shutdown after the evidence has been captured.
 
 Press `Ctrl-C` in the terminal after the results appear. The script saves the
 filtered device output to:
@@ -79,8 +88,8 @@ version JSON. Acceptance B requires the JSON returned by `tsnet.Start()` plus
 the associated Go log lines. A HAP build, ELF inspection, emulator output, or
 invented sample log is not a substitute.
 
-Expected diagnostic behavior is not hard-coded as success. In particular,
-Tailscale v1.86.2 currently has no OpenHarmony-specific default-route reader,
-so the real device may report `defaultRoute.error: "TODO"`; this must be
-recorded as a compatibility issue while the remaining checks are evaluated
-independently.
+Expected diagnostic behavior is not hard-coded as success. On the tested API
+24 device, raw default-route Netlink access returned `bind: permission denied`,
+and route-change subscription fell back to polling. Both limitations are
+reported verbatim while storage, socket, DNS, interface, and engine results are
+evaluated independently.

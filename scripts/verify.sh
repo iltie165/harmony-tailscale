@@ -34,6 +34,9 @@ docker run --rm --network host \
       tailscale_ohos_core_probe \
       tailscale_ohos_start \
       tailscale_ohos_status \
+      tailscale_ohos_login \
+      tailscale_ohos_logout \
+      tailscale_ohos_online_peers \
       tailscale_ohos_close \
       tailscale_ohos_diagnostics \
       tailscale_ohos_logs \

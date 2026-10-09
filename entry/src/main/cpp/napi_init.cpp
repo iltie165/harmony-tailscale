@@ -15,6 +15,10 @@ constexpr const char *TS_LOG_TAG = "TailscaleNAPI";
 
 enum class AsyncOperation {
     Start,
+    Status,
+    Login,
+    Logout,
+    OnlinePeers,
     Diagnostics,
     Close,
 };
@@ -26,6 +30,7 @@ struct AsyncContext {
     AsyncOperation operation = AsyncOperation::Start;
     std::string dataDir;
     std::string hostname;
+    std::string filter;
     std::string result;
     std::string error;
 };
@@ -113,6 +118,10 @@ const char *OperationName(AsyncOperation operation)
 {
     switch (operation) {
         case AsyncOperation::Start: return "start";
+        case AsyncOperation::Status: return "status";
+        case AsyncOperation::Login: return "login";
+        case AsyncOperation::Logout: return "logout";
+        case AsyncOperation::OnlinePeers: return "onlinePeers";
         case AsyncOperation::Diagnostics: return "diagnostics";
         case AsyncOperation::Close: return "close";
     }
@@ -132,11 +141,6 @@ napi_value GetVersion(napi_env env, napi_callback_info)
     return MakeString(env, output.str());
 }
 
-napi_value GetStatus(napi_env env, napi_callback_info)
-{
-    return MakeString(env, TakeGoString(tailscale_ohos_status()));
-}
-
 napi_value GetLogs(napi_env env, napi_callback_info)
 {
     const std::string output = TakeGoString(tailscale_ohos_logs());
@@ -152,6 +156,19 @@ void ExecuteAsync(napi_env, void *data)
             context->result = TakeGoString(tailscale_ohos_start(
                 const_cast<char *>(context->dataDir.c_str()),
                 const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::Status:
+            context->result = TakeGoString(tailscale_ohos_status());
+            break;
+        case AsyncOperation::Login:
+            context->result = TakeGoString(tailscale_ohos_login());
+            break;
+        case AsyncOperation::Logout:
+            context->result = TakeGoString(tailscale_ohos_logout());
+            break;
+        case AsyncOperation::OnlinePeers:
+            context->result = TakeGoString(
+                tailscale_ohos_online_peers(const_cast<char *>(context->filter.c_str())));
             break;
         case AsyncOperation::Diagnostics:
             context->result = TakeGoString(
@@ -171,7 +188,14 @@ void CompleteAsync(napi_env env, napi_status status, void *data)
 {
     auto *context = static_cast<AsyncContext *>(data);
     if (status == napi_ok && context->error.empty()) {
-        LogLine(std::string("Async ") + OperationName(context->operation) + " result: " + context->result);
+        const std::string operationName = OperationName(context->operation);
+        if (context->operation == AsyncOperation::Start ||
+            context->operation == AsyncOperation::Diagnostics ||
+            context->operation == AsyncOperation::Close) {
+            LogLine("Async " + operationName + " result: " + context->result);
+        } else {
+            LogLine("Async " + operationName + " completed; structured result kept out of HiLog");
+        }
         napi_resolve_deferred(env, context->deferred, MakeString(env, context->result));
     } else {
         const std::string message = context->error.empty() ? "NAPI async work failed" : context->error;
@@ -228,6 +252,46 @@ napi_value Start(napi_env env, napi_callback_info info)
     return QueueAsync(env, context, "tailscaleStart");
 }
 
+napi_value GetStatus(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::Status;
+    return QueueAsync(env, context, "tailscaleStatus");
+}
+
+napi_value Login(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::Login;
+    return QueueAsync(env, context, "tailscaleLogin");
+}
+
+napi_value Logout(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::Logout;
+    return QueueAsync(env, context, "tailscaleLogout");
+}
+
+napi_value OnlinePeers(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value argv[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc != 1) {
+        napi_throw_type_error(env, nullptr, "onlinePeers(filter) requires one string");
+        return nullptr;
+    }
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::OnlinePeers;
+    if (!ReadString(env, argv[0], context->filter)) {
+        delete context;
+        napi_throw_type_error(env, nullptr, "filter must be a string");
+        return nullptr;
+    }
+    return QueueAsync(env, context, "tailscaleOnlinePeers");
+}
+
 napi_value Diagnostics(napi_env env, napi_callback_info info)
 {
     size_t argc = 1;
@@ -261,6 +325,9 @@ napi_value Init(napi_env env, napi_value exports)
         {"getStatus", nullptr, GetStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getLogs", nullptr, GetLogs, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"start", nullptr, Start, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"login", nullptr, Login, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"logout", nullptr, Logout, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"onlinePeers", nullptr, OnlinePeers, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"diagnostics", nullptr, Diagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"close", nullptr, Close, nullptr, nullptr, nullptr, napi_default, nullptr},
     };

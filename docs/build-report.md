@@ -31,8 +31,8 @@ Verified artifacts:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/libtailscale_ohos.so` | 25,547,136 bytes | `230092d25945c3ce7438f621f0e30ff6cbff9dc6525ccdc0156f5b303f1d2ec7` |
-| `dist/libtailscale_ohos.h` | 2,194 bytes | `629ebf978110c0ee5a13aa8213ca87eb9e8d47a2173682a84ac423dea465107b` |
+| `dist/libtailscale_ohos.so` | 25,572,672 bytes | `08403f7ffdd41bd8544a1e3a0b60ca387299aa46d89b51b48924ff471aeadde3` |
+| `dist/libtailscale_ohos.h` | 2,326 bytes | `c1476e5ad1bad3d00a90930a300003c247696b8cc576107936f4d300dc183dae` |
 
 ## Compatibility patches
 
@@ -97,28 +97,39 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 26,990,740 bytes | `b49263561dbd3f10bb0b5d6fdecb9fe78278f2167fe32b3e4e318883bc2b92d5` |
-| `dist/hap/tailscale-probe-signed.hap` | 27,278,134 bytes | `fb06bc02f4ba06016151e7a7e06f21fce248d5ad823fb696d3c098faa6611d24` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 27,028,846 bytes | `ecab57ff633c79e5d8489e0b68e2a3e7c98090a0adf4a57cffb8413609f1bd82` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,304,681 bytes | `29f872fd2130526ad9def7bdd673b94be059d96b9fddfd62f95c383c4449db69` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
 images were modified.
 
-### Device verification boundary
+### Phase 2 real-device results
 
-No HarmonyOS device was visible to `hdc` during this build (`[Empty]`). A
-device-bound debug profile was used to sign the HAP, and `hap-sign-tool`
-reported `Verify success`, but installation and runtime behavior remain
-explicitly unverified and must not be inferred from the successful HAP build:
+Version 2.0.3 was installed on a HarmonyOS 6.1.1/API 24 device. Real UI output
+and HiLog proved `abiVersion: 2`, Tailscale 1.86.2, Go 1.24.5,
+`coreProbe: true`, and a successful transition to `state: started`. HiLog also
+proved UDP4/UDP6 Magicsock creation, WireGuard device Up, DERP receive routines,
+engine creation, and persistent state at the app-private
+`filesDir/tailscale/tailscaled.state` path.
 
-- dynamic loading by the real device linker;
-- ArkTS -> NAPI -> Go calls on device;
-- app sandbox file persistence;
-- `tsnet.Server.Start()` outcome and backend state;
-- socket, DNS, interface, route, and network-change behavior on the device;
-- actual HiLog output and Go panic propagation.
+Storage, TCP, UDP, DNS, interface enumeration, and the Tailscale network monitor
+passed. HarmonyOS denied raw default-route Netlink bind and RTMGRP subscription,
+so Tailscale fell back to polling with an empty default-route interface. Forced
+UDP buffer enlargement was also denied and explicitly reported as a
+throughput-only limitation. The fake/no-op TUN, router, and DNS implementations
+are expected for `tsnet`; full-device routing remains a VPN Extension task.
 
-Notable expected compatibility signal: for `GOOS=openharmony`, Tailscale
-v1.86.2 selects its polling network monitor, while its generic default-route
-implementation returns `TODO`. The diagnostics surface that error verbatim so
-it can be confirmed and addressed from real-device evidence rather than hidden.
+### Phase 3 build status
+
+Version 3.0.0 / C ABI 3 adds async LocalAPI status, official interactive login,
+logout, and visible online-peer listing. Filters support all peers, ACL tags,
+user identity, and hostname text. ACL `group:` membership is deliberately not
+claimed because it requires the Tailscale management API and a server-side OAuth
+credential. Authentication URLs are opened by ArkTS with `UIAbilityContext.openLink`
+and redacted from Go/HiLog output.
+
+Go unit tests, OpenHarmony ARM64 build, Native C++ link, ArkTS compilation, HAP
+payload verification, HAP signing, and native code-sign verification pass. The
+Phase 3 login and online-peer behavior still require real-device validation;
+build/signature success is not substituted for that evidence.

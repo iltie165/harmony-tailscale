@@ -1,6 +1,9 @@
 export const getVersion: () => string;
-export const getStatus: () => string;
+export const getStatus: () => Promise<string>;
 export const getLogs: () => string;
 export const start: (dataDir: string, hostname: string) => Promise<string>;
+export const login: () => Promise<string>;
+export const logout: () => Promise<string>;
+export const onlinePeers: (filter: string) => Promise<string>;
 export const diagnostics: (dataDir: string) => Promise<string>;
 export const close: () => Promise<string>;

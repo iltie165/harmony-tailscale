@@ -47,10 +47,13 @@ docker run --rm --network host \
     grep -q "napi_module_register" <<<"$napi_symbols"
     grep -q "napi_define_properties" <<<"$napi_symbols"
     napi_strings=$(strings -a /verify/libtailscale_napi.so)
-    for property in getVersion getStatus getLogs start diagnostics close tailscale_napi; do
+    for property in getVersion getStatus getLogs start login logout onlinePeers diagnostics close tailscale_napi; do
       grep -Fxq "$property" <<<"$napi_strings"
     done
-    readelf -Ws /verify/libtailscale_ohos.so | grep -Eq "[[:space:]]tailscale_ohos_start$"
+    go_symbols=$(readelf -Ws /verify/libtailscale_ohos.so)
+    for symbol in tailscale_ohos_start tailscale_ohos_status tailscale_ohos_login tailscale_ohos_logout tailscale_ohos_online_peers; do
+      grep -Eq "[[:space:]]${symbol}$" <<<"$go_symbols"
+    done
     if readelf -rW /verify/libtailscale_ohos.so | grep -q R_AARCH64_TLS_TPREL64; then
       echo "forbidden TLS relocation in packaged Go library" >&2
       exit 1

@@ -17,11 +17,13 @@ import (
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
@@ -30,7 +32,7 @@ import (
 )
 
 const (
-	abiVersion  = 2
+	abiVersion  = 3
 	maxLogLines = 512
 )
 
@@ -73,6 +75,52 @@ type diagnosticsResult struct {
 	Error          string          `json:"error,omitempty"`
 }
 
+type peerInfo struct {
+	ID           string   `json:"id"`
+	HostName     string   `json:"hostName,omitempty"`
+	DNSName      string   `json:"dnsName,omitempty"`
+	OS           string   `json:"os,omitempty"`
+	UserID       string   `json:"userId,omitempty"`
+	UserLogin    string   `json:"userLogin,omitempty"`
+	UserName     string   `json:"userName,omitempty"`
+	Online       bool     `json:"online"`
+	Active       bool     `json:"active"`
+	TailscaleIPs []string `json:"tailscaleIPs,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	Relay        string   `json:"relay,omitempty"`
+	LastSeen     string   `json:"lastSeen,omitempty"`
+}
+
+type tailnetInfo struct {
+	Name            string `json:"name,omitempty"`
+	MagicDNSSuffix  string `json:"magicDNSSuffix,omitempty"`
+	MagicDNSEnabled bool   `json:"magicDNSEnabled"`
+}
+
+type controlStatusResult struct {
+	OK             bool         `json:"ok"`
+	Operation      string       `json:"operation"`
+	LifecycleState string       `json:"lifecycleState"`
+	BackendState   string       `json:"backendState,omitempty"`
+	AuthURL        string       `json:"authUrl,omitempty"`
+	LoggedIn       bool         `json:"loggedIn"`
+	TailscaleIPs   []string     `json:"tailscaleIPs,omitempty"`
+	Self           *peerInfo    `json:"self,omitempty"`
+	Tailnet        *tailnetInfo `json:"tailnet,omitempty"`
+	Health         []string     `json:"health,omitempty"`
+	Error          string       `json:"error,omitempty"`
+}
+
+type onlinePeersResult struct {
+	OK         bool       `json:"ok"`
+	Operation  string     `json:"operation"`
+	Filter     string     `json:"filter,omitempty"`
+	FilterKind string     `json:"filterKind"`
+	Count      int        `json:"count"`
+	Peers      []peerInfo `json:"peers"`
+	Error      string     `json:"error,omitempty"`
+}
+
 var lifecycle = struct {
 	sync.RWMutex
 	server    *tsnet.Server
@@ -106,7 +154,22 @@ func appendLog(format string, args ...any) {
 }
 
 func bridgeLogf(format string, args ...any) {
-	appendLog(format, args...)
+	appendLog("%s", redactLoginURLs(fmt.Sprintf(format, args...)))
+}
+
+func redactLoginURLs(value string) string {
+	const loginURL = "https://login.tailscale.com/"
+	for {
+		start := strings.Index(value, loginURL)
+		if start < 0 {
+			return value
+		}
+		end := start
+		for end < len(value) && value[end] != ' ' && value[end] != '\n' && value[end] != '\r' && value[end] != '\t' {
+			end++
+		}
+		value = value[:start] + "[REDACTED_TAILSCALE_LOGIN_URL]" + value[end:]
+	}
 }
 
 func cJSON(value any) *C.char {
@@ -148,6 +211,110 @@ func stateResult(operation string) operationResult {
 		Error:     lifecycle.lastError,
 		DataDir:   lifecycle.dataDir,
 		Hostname:  lifecycle.hostname,
+	}
+}
+
+func currentServer() (*tsnet.Server, string, error) {
+	lifecycle.RLock()
+	defer lifecycle.RUnlock()
+	if lifecycle.server == nil || lifecycle.state == "idle" || lifecycle.state == "closed" {
+		return nil, lifecycle.state, fmt.Errorf("tsnet server is not initialized")
+	}
+	return lifecycle.server, lifecycle.state, nil
+}
+
+func peerFromStatus(status *ipnstate.Status, peer *ipnstate.PeerStatus) peerInfo {
+	result := peerInfo{
+		ID:       string(peer.ID),
+		HostName: peer.HostName,
+		DNSName:  strings.TrimSuffix(peer.DNSName, "."),
+		OS:       peer.OS,
+		UserID:   peer.UserID.String(),
+		Online:   peer.Online,
+		Active:   peer.Active,
+		Relay:    peer.Relay,
+	}
+	for _, address := range peer.TailscaleIPs {
+		result.TailscaleIPs = append(result.TailscaleIPs, address.String())
+	}
+	if peer.Tags != nil {
+		result.Tags = append(result.Tags, peer.Tags.AsSlice()...)
+		sort.Strings(result.Tags)
+	}
+	if !peer.LastSeen.IsZero() {
+		result.LastSeen = peer.LastSeen.UTC().Format(time.RFC3339)
+	}
+	if user, ok := status.User[peer.UserID]; ok {
+		result.UserLogin = user.LoginName
+		result.UserName = user.DisplayName
+	}
+	return result
+}
+
+func controlStatus(operation, lifecycleState string, status *ipnstate.Status, err error) controlStatusResult {
+	result := controlStatusResult{Operation: operation, LifecycleState: lifecycleState}
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	result.OK = true
+	result.BackendState = status.BackendState
+	result.AuthURL = status.AuthURL
+	result.LoggedIn = status.BackendState == "Running"
+	result.Health = append(result.Health, status.Health...)
+	for _, address := range status.TailscaleIPs {
+		result.TailscaleIPs = append(result.TailscaleIPs, address.String())
+	}
+	if status.Self != nil {
+		self := peerFromStatus(status, status.Self)
+		result.Self = &self
+	}
+	if status.CurrentTailnet != nil {
+		result.Tailnet = &tailnetInfo{
+			Name:            status.CurrentTailnet.Name,
+			MagicDNSSuffix:  status.CurrentTailnet.MagicDNSSuffix,
+			MagicDNSEnabled: status.CurrentTailnet.MagicDNSEnabled,
+		}
+	}
+	return result
+}
+
+func filterKind(filter string) string {
+	switch {
+	case filter == "":
+		return "all"
+	case strings.HasPrefix(strings.ToLower(filter), "tag:"):
+		return "tag"
+	case strings.HasPrefix(strings.ToLower(filter), "user:"):
+		return "user"
+	case strings.HasPrefix(strings.ToLower(filter), "group:"):
+		return "acl-group"
+	default:
+		return "text"
+	}
+}
+
+func peerMatchesFilter(peer peerInfo, filter string) bool {
+	filter = strings.TrimSpace(filter)
+	if filter == "" {
+		return true
+	}
+	lower := strings.ToLower(filter)
+	switch {
+	case strings.HasPrefix(lower, "tag:"):
+		for _, tag := range peer.Tags {
+			if strings.EqualFold(tag, filter) {
+				return true
+			}
+		}
+		return false
+	case strings.HasPrefix(lower, "user:"):
+		value := strings.TrimSpace(filter[len("user:"):])
+		return strings.EqualFold(peer.UserLogin, value) || strings.EqualFold(peer.UserName, value)
+	default:
+		return strings.Contains(strings.ToLower(peer.HostName), lower) ||
+			strings.Contains(strings.ToLower(peer.DNSName), lower) ||
+			strings.Contains(strings.ToLower(peer.UserLogin), lower)
 	}
 }
 
@@ -249,10 +416,167 @@ func tailscale_ohos_start(cDataDir, cHostname *C.char) (output *C.char) {
 	return cJSON(operationResult{OK: true, Operation: "start", State: lifecycle.state, DataDir: dataDir, Hostname: hostname, Message: "tsnet.Server.Start returned nil"})
 }
 
+func fetchControlStatus(operation string) controlStatusResult {
+	server, state, err := currentServer()
+	if err != nil {
+		return controlStatus(operation, state, nil, err)
+	}
+	client, err := server.LocalClient()
+	if err != nil {
+		return controlStatus(operation, state, nil, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	status, err := client.Status(ctx)
+	return controlStatus(operation, state, status, err)
+}
+
 //export tailscale_ohos_status
 func tailscale_ohos_status() (output *C.char) {
 	defer panicResult("status", &output)
-	return cJSON(stateResult("status"))
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	return cJSON(fetchControlStatus("status"))
+}
+
+//export tailscale_ohos_login
+func tailscale_ohos_login() (output *C.char) {
+	defer panicResult("login", &output)
+	operationMu.Lock()
+	defer operationMu.Unlock()
+
+	server, state, err := currentServer()
+	if err != nil {
+		return cJSON(controlStatus("login", state, nil, err))
+	}
+	client, err := server.LocalClient()
+	if err != nil {
+		return cJSON(controlStatus("login", state, nil, err))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	status, err := client.Status(ctx)
+	if err != nil {
+		return cJSON(controlStatus("login", state, nil, err))
+	}
+	if status.BackendState == "Running" || status.AuthURL != "" {
+		return cJSON(controlStatus("login", state, status, nil))
+	}
+	appendLog("interactive login requested")
+	if err := client.StartLoginInteractive(ctx); err != nil {
+		appendLog("interactive login request failed: %v", err)
+		return cJSON(controlStatus("login", state, nil, err))
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		status, err = client.Status(ctx)
+		if err != nil {
+			return cJSON(controlStatus("login", state, nil, err))
+		}
+		if status.BackendState == "Running" || status.AuthURL != "" {
+			appendLog("interactive login state=%q authURL=%v", status.BackendState, status.AuthURL != "")
+			return cJSON(controlStatus("login", state, status, nil))
+		}
+		select {
+		case <-ctx.Done():
+			result := controlStatus("login", state, status, nil)
+			result.OK = false
+			result.Error = "timed out waiting for Tailscale authentication URL"
+			return cJSON(result)
+		case <-ticker.C:
+		}
+	}
+}
+
+//export tailscale_ohos_logout
+func tailscale_ohos_logout() (output *C.char) {
+	defer panicResult("logout", &output)
+	operationMu.Lock()
+	defer operationMu.Unlock()
+
+	server, state, err := currentServer()
+	if err != nil {
+		return cJSON(controlStatus("logout", state, nil, err))
+	}
+	client, err := server.LocalClient()
+	if err != nil {
+		return cJSON(controlStatus("logout", state, nil, err))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.Logout(ctx); err != nil {
+		appendLog("logout failed: %v", err)
+		return cJSON(controlStatus("logout", state, nil, err))
+	}
+	status, err := client.Status(ctx)
+	appendLog("logout completed")
+	return cJSON(controlStatus("logout", state, status, err))
+}
+
+//export tailscale_ohos_online_peers
+func tailscale_ohos_online_peers(cFilter *C.char) (output *C.char) {
+	defer panicResult("onlinePeers", &output)
+	operationMu.Lock()
+	defer operationMu.Unlock()
+
+	filter := strings.TrimSpace(C.GoString(cFilter))
+	result := onlinePeersResult{
+		Operation:  "onlinePeers",
+		Filter:     filter,
+		FilterKind: filterKind(filter),
+		Peers:      []peerInfo{},
+	}
+	if result.FilterKind == "acl-group" {
+		result.Error = "ACL group membership is not exposed by the node LocalAPI; use a management backend with Tailscale OAuth"
+		return cJSON(result)
+	}
+	server, _, err := currentServer()
+	if err != nil {
+		result.Error = err.Error()
+		return cJSON(result)
+	}
+	client, err := server.LocalClient()
+	if err != nil {
+		result.Error = err.Error()
+		return cJSON(result)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	status, err := client.Status(ctx)
+	if err != nil {
+		result.Error = err.Error()
+		return cJSON(result)
+	}
+	if status.BackendState != "Running" {
+		result.Error = fmt.Sprintf("Tailscale backend is %q; login must complete before peers are available", status.BackendState)
+		return cJSON(result)
+	}
+	for _, key := range status.Peers() {
+		peer := status.Peer[key]
+		if peer == nil || !peer.Online {
+			continue
+		}
+		item := peerFromStatus(status, peer)
+		if peerMatchesFilter(item, filter) {
+			result.Peers = append(result.Peers, item)
+		}
+	}
+	sort.Slice(result.Peers, func(i, j int) bool {
+		left := result.Peers[i].DNSName
+		right := result.Peers[j].DNSName
+		if left == "" {
+			left = result.Peers[i].HostName
+		}
+		if right == "" {
+			right = result.Peers[j].HostName
+		}
+		return strings.ToLower(left) < strings.ToLower(right)
+	})
+	result.OK = true
+	result.Count = len(result.Peers)
+	appendLog("online peers query filter=%q kind=%s count=%d", filter, result.FilterKind, result.Count)
+	return cJSON(result)
 }
 
 //export tailscale_ohos_close

@@ -2,15 +2,15 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "Tailscale Go runtime validation"
+      "value": "Official Tailscale Core for HarmonyOS"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "Tailscale runtime probe"
+      "value": "Tailscale control client"
     },
     {
       "name": "EntryAbility_label",
-      "value": "Tailscale Probe"
+      "value": "Tailscale for HarmonyOS"
     }
   ]
 }
