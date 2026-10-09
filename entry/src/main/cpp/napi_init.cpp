@@ -103,7 +103,10 @@ void LogLine(const std::string &line)
 void ForwardGoLogs()
 {
     const std::string text = TakeGoString(tailscale_ohos_logs());
-    constexpr size_t MAX_FORWARDED_BYTES = 15000;
+    // HarmonyOS may rate-limit consecutive OH_LOG_Print calls from one app.
+    // Keep the complete payload, including the prefix, below LogLine's
+    // single-record limit so the newest failure is emitted atomically.
+    constexpr size_t MAX_FORWARDED_BYTES = 2400;
     size_t begin = 0;
     if (text.size() > MAX_FORWARDED_BYTES) {
         begin = text.size() - MAX_FORWARDED_BYTES;
