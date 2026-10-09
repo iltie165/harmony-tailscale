@@ -3,7 +3,7 @@
 ## Current status
 
 The project produces a signed, statically verified HAP at
-`dist/hap/tailscale-probe-signed.hap`. Version 3.0.1 adds official interactive
+`dist/hap/tailscale-probe-signed.hap`. Version 3.0.2 adds official interactive
 login, control status/logout, and online peer listing. Phase 2 was proven on a
 HarmonyOS 6.1.1/API 24 device; the new Phase 3 login functions still require a
 fresh real-device run.
@@ -62,19 +62,23 @@ this phase. The app-private state directory is selected automatically.
    and default-route results.
 3. **Start tsnet asynchronously** — must leave ArkUI responsive and return
    either `state: started` or a concrete Go error/panic.
-4. **Login with official Tailscale** — subscribes to the official IPN Bus
+4. **Test system browser only** — opens the public Tailscale login home page
+   without invoking Go or tsnet. This isolates HarmonyOS link dispatch from
+   control-plane authentication URL generation.
+5. **Login with official Tailscale** — subscribes to the official IPN Bus
    `BrowseToURL` event, then opens the short-lived authentication URL in the
-   system browser. Complete login and return to the app.
-5. **Refresh control status** — must progress to `backendState: Running`, show
+   system browser. If `openLink` fails, the app retries with an implicit
+   `ACTION_VIEW_DATA` Want. Complete login and return to the app.
+6. **Refresh control status** — must progress to `backendState: Running`, show
    at least one Tailscale IP, and identify the current tailnet.
-6. **List online machines** — leave the filter blank for all visible online
+7. **List online machines** — leave the filter blank for all visible online
    peers, use `tag:server` for an ACL tag, or `user:name` for a user identity.
    A `group:name` filter must return the explicit management-OAuth limitation.
-7. **Read Go logs** — displays the same Go/Tailscale log buffer forwarded to
+8. **Read Go logs** — displays the same Go/Tailscale log buffer forwarded to
    HiLog.
-8. **Logout from Tailscale** — verifies control-plane logout when explicitly
+9. **Logout from Tailscale** — verifies control-plane logout when explicitly
    intended; this clears the node login state.
-9. **Close tsnet** — clean shutdown after the evidence has been captured.
+10. **Close tsnet** — clean shutdown after the evidence has been captured.
 
 Press `Ctrl-C` in the terminal after the results appear. The script saves the
 filtered device output to:

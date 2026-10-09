@@ -1,4 +1,4 @@
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
 
@@ -48,6 +48,41 @@ struct Index {
     }
   }
 
+  private async openSystemBrowser(url: string): Promise<string> {
+    if (!this.appContext) {
+      throw new Error('UIAbilityContext is unavailable');
+    }
+    try {
+      await this.appContext.openLink(url, { appLinkingOnly: false });
+      return 'UIAbilityContext.openLink';
+    } catch (openLinkError) {
+      const browserWant: Want = {
+        action: 'ohos.want.action.viewData',
+        uri: url,
+        entities: ['entity.system.browsable']
+      };
+      try {
+        await this.appContext.startAbility(browserWant);
+        return 'UIAbilityContext.startAbility fallback';
+      } catch (startAbilityError) {
+        throw new Error(`openLink failed: ${openLinkError}; startAbility fallback failed: ${startAbilityError}`);
+      }
+    }
+  }
+
+  private async testSystemBrowser(): Promise<void> {
+    this.busy = true;
+    this.output = 'Testing HarmonyOS browser launch independently of Tailscale...';
+    try {
+      const method: string = await this.openSystemBrowser('https://login.tailscale.com/');
+      this.output = `Browser launch requested successfully via ${method}.`;
+    } catch (error) {
+      this.output = `System browser test failed: ${error}`;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   private async runDiagnostics(): Promise<void> {
     this.busy = true;
     try {
@@ -94,12 +129,16 @@ struct Index {
       this.output = this.formatJSON(result);
       const control: ControlResult = JSON.parse(result) as ControlResult;
       if (control.authUrl && this.appContext) {
-        hilog.info(DOMAIN, TAG, 'opening Tailscale authentication URL');
+        this.output = 'Tailscale login URL received. Opening the system browser...';
+        hilog.info(DOMAIN, TAG, 'Tailscale login URL received; opening system browser');
         try {
-          await this.appContext.openLink(control.authUrl);
+          const method: string = await this.openSystemBrowser(control.authUrl);
+          this.output = `Tailscale login URL received. Browser launch requested via ${method}.`;
         } catch (openError) {
-          this.output = `${this.formatJSON(result)}\n\nBrowser open failed: ${openError}`;
+          this.output = `Tailscale login URL received, but browser launch failed: ${openError}`;
         }
+      } else if (!control.authUrl) {
+        this.output = `${this.formatJSON(result)}\n\nBrowser was not invoked because the Go result contained no authUrl.`;
       }
     } catch (error) {
       this.output = `Tailscale login failed: ${error}`;
@@ -195,6 +234,13 @@ struct Index {
           .enabled(!this.busy)
           .onClick(() => {
             this.login();
+          })
+
+        Button('Test system browser only')
+          .width('100%')
+          .enabled(!this.busy)
+          .onClick(() => {
+            this.testSystemBrowser();
           })
 
         Button('Refresh control status')

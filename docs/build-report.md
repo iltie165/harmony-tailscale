@@ -97,8 +97,8 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 27,033,815 bytes | `d0786f67f3b6e6d63400080a2acc0578f863dae0071e1939bef1694fece35462` |
-| `dist/hap/tailscale-probe-signed.hap` | 27,316,356 bytes | `f951e941f00345adc1c204a479d34ca35e65db8e4ec5ff29887f987c4836ef98` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 27,038,296 bytes | `78c5513310220e5122ca92c1d2612661e3f7da70bb47e8d1ddf93a85f2510987` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,317,392 bytes | `0969a30ec6c95e4b30da84876b5a31c71297525c1557731a2f515c77601344bf` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
@@ -122,7 +122,7 @@ are expected for `tsnet`; full-device routing remains a VPN Extension task.
 
 ### Phase 3 build status
 
-Version 3.0.1 / C ABI 3 adds async LocalAPI status, official interactive login,
+Version 3.0.2 / C ABI 3 adds async LocalAPI status, official interactive login,
 logout, and visible online-peer listing. Filters support all peers, ACL tags,
 user identity, and hostname text. ACL `group:` membership is deliberately not
 claimed because it requires the Tailscale management API and a server-side OAuth
@@ -130,6 +130,8 @@ credential. Authentication URLs are opened by ArkTS with `UIAbilityContext.openL
 and redacted from Go/HiLog output. Login URL acquisition uses the same IPN Bus
 `BrowseToURL` event as the official Tailscale CLI, and platform diagnostics
 include an HTTPS reachability check for the official control plane.
+The UI also provides an independent browser-launch test and falls back from
+`openLink` to an implicit `ACTION_VIEW_DATA` Want when necessary.
 
 Go unit tests, OpenHarmony ARM64 build, Native C++ link, ArkTS compilation, HAP
 payload verification, HAP signing, and native code-sign verification pass. The
