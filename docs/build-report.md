@@ -31,7 +31,7 @@ Verified artifacts:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/libtailscale_ohos.so` | 25,577,792 bytes | `f9cb0942831eb83e7a0c08c2c073b4ff43402905525762ee9104e8abaccd6bd9` |
+| `dist/libtailscale_ohos.so` | 25,578,208 bytes | `077bb99dd8fed5f6e782437f78c3b4acfe1e8106785ac8e4d82053eab7138546` |
 | `dist/libtailscale_ohos.h` | 2,326 bytes | `c1476e5ad1bad3d00a90930a300003c247696b8cc576107936f4d300dc183dae` |
 
 ## Compatibility patches
@@ -97,8 +97,8 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 27,040,088 bytes | `2a9f622790e13b31a923a7a00979ec3bff78c366088c45c552ec9a0cf9e00b2f` |
-| `dist/hap/tailscale-probe-signed.hap` | 27,315,601 bytes | `f6a63adfcb4ffa21c19b53dc9a7e7ce15987c89e69b1f991f44ad39295eb0a53` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 27,040,504 bytes | `1fc09bb4f1852451cdce013de3979a38c4a681d5f49fb6abe5de70a0b742bea2` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,315,184 bytes | `64af4a0f39db0ef94accee579485e1105a12f1f4b2d742253571ecb6bced891c` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
@@ -122,7 +122,7 @@ are expected for `tsnet`; full-device routing remains a VPN Extension task.
 
 ### Phase 3 build status
 
-Version 3.0.5 / C ABI 3 adds async LocalAPI status, official interactive login,
+Version 3.0.6 / C ABI 3 adds async LocalAPI status, official interactive login,
 logout, and visible online-peer listing. Filters support all peers, ACL tags,
 user identity, and hostname text. ACL `group:` membership is deliberately not
 claimed because it requires the Tailscale management API and a server-side OAuth
@@ -140,6 +140,13 @@ ABI; the repeated device-side truncation at `[v` was therefore not mistaken for
 a HiLog limit. Failed login results also embed the newest 24 sanitized Go log
 lines in `debugLogs`, allowing the next device run to report the backend failure
 without relying on HDC/HiLog delivery.
+Version 3.0.6 disables Tailscale's Linux `netns` socket control from the
+OpenHarmony wrapper. The OpenHarmony Go fork selects `netns_linux.go`, while
+HarmonyOS denies default-route Netlink access; the Linux fallback can therefore
+bind control-plane sockets to `lo`. This adapter matches the official
+`tailscaled --tun=userspace-networking` behavior and leaves outbound control,
+log, and DERP sockets on the platform's normal network path. A host unit test
+asserts that the resulting `netns.Listener` has no socket-control hook.
 
 Go unit tests, OpenHarmony ARM64 build, Native C++ link, ArkTS compilation, HAP
 payload verification, HAP signing, and native code-sign verification pass. The

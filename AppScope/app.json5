@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.ezoo.tailscaleprobe",
     "vendor": "ezoo",
-    "versionCode": 3000005,
-    "versionName": "3.0.5",
+    "versionCode": 3000006,
+    "versionName": "3.0.6",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

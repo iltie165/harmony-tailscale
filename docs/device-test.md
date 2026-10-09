@@ -3,7 +3,7 @@
 ## Current status
 
 The project produces a signed, statically verified HAP at
-`dist/hap/tailscale-probe-signed.hap`. Version 3.0.5 adds official interactive
+`dist/hap/tailscale-probe-signed.hap`. Version 3.0.6 adds official interactive
 login, control status/logout, and online peer listing. Phase 2 was proven on a
 HarmonyOS 6.1.1/API 24 device; the new Phase 3 login functions still require a
 fresh real-device run.
@@ -71,6 +71,9 @@ this phase. The app-private state directory is selected automatically.
    `ACTION_VIEW_DATA` Want. Complete login and return to the app.
    On failure, the returned JSON embeds the newest 24 sanitized Go log lines in
    `debugLogs`; this evidence does not depend on HiLog delivery.
+   Version 3.0.6 disables Tailscale's Linux `netns` socket binding on
+   OpenHarmony, matching official userspace-networking mode. The Go logs must
+   contain `platform adapter: Tailscale netns disabled` before login.
 6. **Refresh control status** — must progress to `backendState: Running`, show
    at least one Tailscale IP, and identify the current tailnet.
 7. **List online machines** — leave the filter blank for all visible online

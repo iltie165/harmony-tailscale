@@ -27,6 +27,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
@@ -37,6 +38,15 @@ const (
 	abiVersion  = 3
 	maxLogLines = 512
 )
+
+func init() {
+	// OpenHarmony selects Tailscale's Linux compatibility files. The Linux
+	// netns dialer falls back to SO_BINDTODEVICE("lo") when route discovery is
+	// unavailable, which traps control and log traffic on HarmonyOS. tsnet uses
+	// userspace networking, so match tailscaled --tun=userspace-networking and
+	// leave outbound sockets on the platform's normal network path.
+	netns.SetEnabled(false)
+}
 
 type operationResult struct {
 	OK        bool   `json:"ok"`
@@ -424,6 +434,7 @@ func tailscale_ohos_start(cDataDir, cHostname *C.char) (output *C.char) {
 	lifecycle.lastError = ""
 	lifecycle.Unlock()
 
+	appendLog("platform adapter: Tailscale netns disabled for userspace networking")
 	appendLog("tsnet.Start begin dir=%q hostname=%q", dataDir, hostname)
 	err := server.Start()
 	lifecycle.Lock()

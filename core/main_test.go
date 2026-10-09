@@ -1,6 +1,19 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
+	"tailscale.com/types/logger"
+)
+
+func TestPlatformAdapterDisablesNetNS(t *testing.T) {
+	listener := netns.Listener(logger.Discard, netmon.NewStatic())
+	if listener.Control != nil {
+		t.Fatal("netns socket control is enabled; HarmonyOS control traffic can be bound to loopback")
+	}
+}
 
 func TestPeerMatchesFilter(t *testing.T) {
 	peer := peerInfo{
