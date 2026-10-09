@@ -51,6 +51,11 @@ hostname is supplied by the UI. No auth key or management credential is
 embedded in the project. Short-lived login URLs are returned only to ArkTS for
 opening in the system browser and are redacted from Go/HiLog output.
 
+Interactive login listens for the official IPN Bus `BrowseToURL` notification
+instead of polling a status snapshot. Diagnostics also test HTTPS reachability
+to `controlplane.tailscale.com` so certificate or network failures are reported
+separately from browser-launch failures.
+
 Online peers can be listed without a filter, filtered by ACL tag such as
 `tag:server`, by login/display name with `user:name`, or by hostname text. ACL
 policy groups (`group:example`) are not exposed by the node LocalAPI and require

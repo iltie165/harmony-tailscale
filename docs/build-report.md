@@ -31,7 +31,7 @@ Verified artifacts:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/libtailscale_ohos.so` | 25,572,672 bytes | `08403f7ffdd41bd8544a1e3a0b60ca387299aa46d89b51b48924ff471aeadde3` |
+| `dist/libtailscale_ohos.so` | 25,576,064 bytes | `0c9894688778446ed6a09aa91cad4ff9a6fac9311440b89f786b157b6c78ac6d` |
 | `dist/libtailscale_ohos.h` | 2,326 bytes | `c1476e5ad1bad3d00a90930a300003c247696b8cc576107936f4d300dc183dae` |
 
 ## Compatibility patches
@@ -97,8 +97,8 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 27,028,846 bytes | `ecab57ff633c79e5d8489e0b68e2a3e7c98090a0adf4a57cffb8413609f1bd82` |
-| `dist/hap/tailscale-probe-signed.hap` | 27,304,681 bytes | `29f872fd2130526ad9def7bdd673b94be059d96b9fddfd62f95c383c4449db69` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 27,033,815 bytes | `d0786f67f3b6e6d63400080a2acc0578f863dae0071e1939bef1694fece35462` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,316,356 bytes | `f951e941f00345adc1c204a479d34ca35e65db8e4ec5ff29887f987c4836ef98` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
@@ -122,12 +122,14 @@ are expected for `tsnet`; full-device routing remains a VPN Extension task.
 
 ### Phase 3 build status
 
-Version 3.0.0 / C ABI 3 adds async LocalAPI status, official interactive login,
+Version 3.0.1 / C ABI 3 adds async LocalAPI status, official interactive login,
 logout, and visible online-peer listing. Filters support all peers, ACL tags,
 user identity, and hostname text. ACL `group:` membership is deliberately not
 claimed because it requires the Tailscale management API and a server-side OAuth
 credential. Authentication URLs are opened by ArkTS with `UIAbilityContext.openLink`
-and redacted from Go/HiLog output.
+and redacted from Go/HiLog output. Login URL acquisition uses the same IPN Bus
+`BrowseToURL` event as the official Tailscale CLI, and platform diagnostics
+include an HTTPS reachability check for the official control plane.
 
 Go unit tests, OpenHarmony ARM64 build, Native C++ link, ArkTS compilation, HAP
 payload verification, HAP signing, and native code-sign verification pass. The

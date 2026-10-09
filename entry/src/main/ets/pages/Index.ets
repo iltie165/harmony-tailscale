@@ -95,7 +95,11 @@ struct Index {
       const control: ControlResult = JSON.parse(result) as ControlResult;
       if (control.authUrl && this.appContext) {
         hilog.info(DOMAIN, TAG, 'opening Tailscale authentication URL');
-        await this.appContext.openLink(control.authUrl);
+        try {
+          await this.appContext.openLink(control.authUrl);
+        } catch (openError) {
+          this.output = `${this.formatJSON(result)}\n\nBrowser open failed: ${openError}`;
+        }
       }
     } catch (error) {
       this.output = `Tailscale login failed: ${error}`;
@@ -232,7 +236,14 @@ struct Index {
             this.closeTsnet();
           })
 
-        Text(this.busy ? 'Working on NAPI worker thread...' : this.output)
+        if (this.busy) {
+          Text('Working on NAPI worker thread...')
+            .fontSize(12)
+            .fontColor('#64748b')
+            .width('100%')
+        }
+
+        Text(this.output)
           .fontFamily('monospace')
           .fontSize(12)
           .width('100%')

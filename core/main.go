@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,6 +24,7 @@ import (
 	"time"
 	"unsafe"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tsnet"
@@ -69,6 +71,7 @@ type diagnosticsResult struct {
 	TCP            checkResult     `json:"tcpSocket"`
 	UDP            checkResult     `json:"udpSocket"`
 	DNS            checkResult     `json:"dns"`
+	ControlPlane   checkResult     `json:"controlPlane"`
 	DefaultRoute   checkResult     `json:"defaultRoute"`
 	NetworkMonitor checkResult     `json:"networkMonitor"`
 	Interfaces     []interfaceInfo `json:"interfaces"`
@@ -462,29 +465,70 @@ func tailscale_ohos_login() (output *C.char) {
 	if status.BackendState == "Running" || status.AuthURL != "" {
 		return cJSON(controlStatus("login", state, status, nil))
 	}
+	watcher, err := client.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+	if err != nil {
+		appendLog("interactive login watcher failed: %v", err)
+		return cJSON(controlStatus("login", state, status, fmt.Errorf("watch login events: %w", err)))
+	}
+	defer watcher.Close()
+
+	snapshot := func(authURL string, operationErr error) controlStatusResult {
+		statusCtx, statusCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer statusCancel()
+		latest, statusErr := client.Status(statusCtx)
+		if statusErr != nil {
+			result := controlStatus("login", state, status, nil)
+			result.OK = false
+			result.Error = statusErr.Error()
+			if operationErr != nil {
+				result.Error = operationErr.Error() + "; status: " + statusErr.Error()
+			}
+			if authURL != "" {
+				result.AuthURL = authURL
+			}
+			return result
+		}
+		result := controlStatus("login", state, latest, nil)
+		if authURL != "" {
+			result.AuthURL = authURL
+		}
+		if operationErr != nil {
+			result.OK = false
+			result.Error = operationErr.Error()
+		}
+		return result
+	}
+
 	appendLog("interactive login requested")
 	if err := client.StartLoginInteractive(ctx); err != nil {
 		appendLog("interactive login request failed: %v", err)
-		return cJSON(controlStatus("login", state, nil, err))
+		return cJSON(snapshot("", err))
 	}
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
 	for {
-		status, err = client.Status(ctx)
+		notify, err := watcher.Next()
 		if err != nil {
-			return cJSON(controlStatus("login", state, nil, err))
+			if ctx.Err() != nil {
+				err = fmt.Errorf("timed out waiting for Tailscale login URL: %w", ctx.Err())
+			} else {
+				err = fmt.Errorf("watch login events: %w", err)
+			}
+			appendLog("interactive login failed: %v", err)
+			return cJSON(snapshot("", err))
 		}
-		if status.BackendState == "Running" || status.AuthURL != "" {
-			appendLog("interactive login state=%q authURL=%v", status.BackendState, status.AuthURL != "")
-			return cJSON(controlStatus("login", state, status, nil))
+		if notify.ErrMessage != nil && *notify.ErrMessage != "" {
+			err := fmt.Errorf("Tailscale backend: %s", *notify.ErrMessage)
+			appendLog("interactive login backend error: %v", err)
+			return cJSON(snapshot("", err))
 		}
-		select {
-		case <-ctx.Done():
-			result := controlStatus("login", state, status, nil)
-			result.OK = false
-			result.Error = "timed out waiting for Tailscale authentication URL"
-			return cJSON(result)
-		case <-ticker.C:
+		if notify.BrowseToURL != nil && *notify.BrowseToURL != "" {
+			appendLog("interactive login URL received from IPN bus")
+			return cJSON(snapshot(*notify.BrowseToURL, nil))
+		}
+		if notify.State != nil {
+			appendLog("interactive login state notification=%q", *notify.State)
+			if *notify.State == ipn.Running {
+				return cJSON(snapshot("", nil))
+			}
 		}
 	}
 }
@@ -692,6 +736,21 @@ func probeDNS() checkResult {
 	return checkResult{OK: true, Detail: strings.Join(addresses, ",")}
 }
 
+func probeControlPlane() checkResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://controlplane.tailscale.com/", nil)
+	if err != nil {
+		return checkResult{Error: err.Error()}
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return checkResult{Error: err.Error()}
+	}
+	defer response.Body.Close()
+	return checkResult{OK: true, Detail: response.Status}
+}
+
 func probeDefaultRoute() checkResult {
 	route, err := netmon.DefaultRoute()
 	if err != nil {
@@ -725,6 +784,7 @@ func tailscale_ohos_diagnostics(cDataDir *C.char) (output *C.char) {
 	result.TCP = probeTCP()
 	result.UDP = probeUDP()
 	result.DNS = probeDNS()
+	result.ControlPlane = probeControlPlane()
 	result.DefaultRoute = probeDefaultRoute()
 	result.NetworkMonitor = probeNetworkMonitor()
 	interfaces, err := probeInterfaces()
@@ -733,8 +793,8 @@ func tailscale_ohos_diagnostics(cDataDir *C.char) (output *C.char) {
 	} else {
 		result.Interfaces = interfaces
 	}
-	result.OK = result.Storage.OK && result.TCP.OK && result.UDP.OK && result.NetworkMonitor.OK && err == nil
-	appendLog("platform diagnostics finished ok=%v dns=%v route=%v interfaces=%d", result.OK, result.DNS.OK, result.DefaultRoute.OK, len(result.Interfaces))
+	result.OK = result.Storage.OK && result.TCP.OK && result.UDP.OK && result.DNS.OK && result.ControlPlane.OK && result.NetworkMonitor.OK && err == nil
+	appendLog("platform diagnostics finished ok=%v dns=%v control=%v route=%v interfaces=%d", result.OK, result.DNS.OK, result.ControlPlane.OK, result.DefaultRoute.OK, len(result.Interfaces))
 	return cJSON(result)
 }
 
