@@ -111,6 +111,7 @@ type controlStatusResult struct {
 	Self           *peerInfo    `json:"self,omitempty"`
 	Tailnet        *tailnetInfo `json:"tailnet,omitempty"`
 	Health         []string     `json:"health,omitempty"`
+	DebugLogs      []string     `json:"debugLogs,omitempty"`
 	Error          string       `json:"error,omitempty"`
 }
 
@@ -142,7 +143,7 @@ var logs = struct {
 }{}
 
 func appendLog(format string, args ...any) {
-	line := strings.TrimSpace(fmt.Sprintf(format, args...))
+	line := sanitizeLogLine(strings.TrimSpace(fmt.Sprintf(format, args...)))
 	if line == "" {
 		return
 	}
@@ -154,6 +155,25 @@ func appendLog(format string, args ...any) {
 		copy(logs.lines, logs.lines[len(logs.lines)-maxLogLines:])
 		logs.lines = logs.lines[:maxLogLines]
 	}
+}
+
+func sanitizeLogLine(line string) string {
+	return strings.ReplaceAll(line, "\x00", "\\x00")
+}
+
+func recentLogLines(limit int) []string {
+	logs.Lock()
+	defer logs.Unlock()
+	if limit <= 0 || len(logs.lines) == 0 {
+		return nil
+	}
+	start := len(logs.lines) - limit
+	if start < 0 {
+		start = 0
+	}
+	result := make([]string, len(logs.lines)-start)
+	copy(result, logs.lines[start:])
+	return result
 }
 
 func bridgeLogf(format string, args ...any) {
@@ -486,6 +506,7 @@ func tailscale_ohos_login() (output *C.char) {
 			if authURL != "" {
 				result.AuthURL = authURL
 			}
+			result.DebugLogs = recentLogLines(24)
 			return result
 		}
 		result := controlStatus("login", state, latest, nil)
@@ -495,6 +516,7 @@ func tailscale_ohos_login() (output *C.char) {
 		if operationErr != nil {
 			result.OK = false
 			result.Error = operationErr.Error()
+			result.DebugLogs = recentLogLines(24)
 		}
 		return result
 	}

@@ -31,7 +31,7 @@ Verified artifacts:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/libtailscale_ohos.so` | 25,576,064 bytes | `0c9894688778446ed6a09aa91cad4ff9a6fac9311440b89f786b157b6c78ac6d` |
+| `dist/libtailscale_ohos.so` | 25,577,792 bytes | `f9cb0942831eb83e7a0c08c2c073b4ff43402905525762ee9104e8abaccd6bd9` |
 | `dist/libtailscale_ohos.h` | 2,326 bytes | `c1476e5ad1bad3d00a90930a300003c247696b8cc576107936f4d300dc183dae` |
 
 ## Compatibility patches
@@ -97,8 +97,8 @@ Verified artifact snapshot:
 
 | File | Size | SHA-256 |
 | --- | ---: | --- |
-| `dist/hap/tailscale-probe-unsigned.hap` | 27,038,360 bytes | `219e33fe657eb113fc295ddecc0093508f2f5e03988a71161d81c5dd8b50a2fd` |
-| `dist/hap/tailscale-probe-signed.hap` | 27,317,329 bytes | `56cff2ad85db67cd3c8376f9b98306a371a6cfeacbd968319afc8889418e5ff3` |
+| `dist/hap/tailscale-probe-unsigned.hap` | 27,040,088 bytes | `2a9f622790e13b31a923a7a00979ec3bff78c366088c45c552ec9a0cf9e00b2f` |
+| `dist/hap/tailscale-probe-signed.hap` | 27,315,601 bytes | `f6a63adfcb4ffa21c19b53dc9a7e7ce15987c89e69b1f991f44ad39295eb0a53` |
 
 The initial build containers used host networking and received the local proxy
 through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`; no host packages or base
@@ -122,7 +122,7 @@ are expected for `tsnet`; full-device routing remains a VPN Extension task.
 
 ### Phase 3 build status
 
-Version 3.0.4 / C ABI 3 adds async LocalAPI status, official interactive login,
+Version 3.0.5 / C ABI 3 adds async LocalAPI status, official interactive login,
 logout, and visible online-peer listing. Filters support all peers, ACL tags,
 user identity, and hostname text. ACL `group:` membership is deliberately not
 claimed because it requires the Tailscale management API and a server-side OAuth
@@ -135,6 +135,11 @@ The UI also provides an independent browser-launch test and falls back from
 The HiLog bridge forwards one atomic 2.4 KB newest-tail record instead of
 hundreds of individual historical lines or multiple chunks, avoiding HarmonyOS
 log-rate limiting that hid the newest control/login failure.
+Version 3.0.5 additionally sanitizes embedded NUL bytes before logs cross the C
+ABI; the repeated device-side truncation at `[v` was therefore not mistaken for
+a HiLog limit. Failed login results also embed the newest 24 sanitized Go log
+lines in `debugLogs`, allowing the next device run to report the backend failure
+without relying on HDC/HiLog delivery.
 
 Go unit tests, OpenHarmony ARM64 build, Native C++ link, ArkTS compilation, HAP
 payload verification, HAP signing, and native code-sign verification pass. The

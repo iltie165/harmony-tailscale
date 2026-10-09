@@ -52,3 +52,11 @@ func TestRedactLoginURLs(t *testing.T) {
 		t.Fatalf("redactLoginURLs() = %q, want %q", got, want)
 	}
 }
+
+func TestSanitizeLogLineEscapesNUL(t *testing.T) {
+	input := "before\x00after"
+	want := `before\x00after`
+	if got := sanitizeLogLine(input); got != want {
+		t.Fatalf("sanitizeLogLine() = %q, want %q", got, want)
+	}
+}
