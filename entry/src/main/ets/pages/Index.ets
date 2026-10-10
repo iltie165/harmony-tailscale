@@ -83,9 +83,11 @@ struct Index {
   }
 
   private applyStatus(result: ControlResult): void {
+    if (!this.mounted) { return; }
     this.status = result;
     if (!isAuthenticated(result)) {
       this.peers = [];
+      this.selectedPeer = undefined;
       this.lastUpdated = '';
       if (this.page === 'detail') { this.page = 'main'; }
     } else {
@@ -97,10 +99,12 @@ struct Index {
 
   private async loadData(): Promise<void> {
     const raw: string = await tailscale.getStatus();
+    if (!this.mounted) { return; }
     this.output = safeOutput(raw);
     this.applyStatus(readControl(raw));
     if (isAuthenticated(this.status)) {
       const peerRaw: string = await tailscale.onlinePeers(this.peerFilter.trim());
+      if (!this.mounted) { return; }
       this.output = safeOutput(peerRaw);
       this.peers = readPeers(peerRaw);
       this.lastUpdated = new Date().toLocaleTimeString();
@@ -113,6 +117,7 @@ struct Index {
     this.progress = '正在恢复登录状态…';
     try {
       readControl(await tailscale.start(this.dataDir, this.hostname));
+      if (!this.mounted) { return; }
       await this.loadData();
     } catch (error) {
       this.restoreDeadline = 0;
@@ -157,7 +162,9 @@ struct Index {
     this.progress = '正在获取安全登录链接…';
     try {
       readControl(await tailscale.start(this.dataDir, this.hostname));
+      if (!this.mounted) { return; }
       const raw: string = await tailscale.login();
+      if (!this.mounted) { return; }
       this.output = safeOutput(raw);
       const result: ControlResult = readControl(raw);
       this.applyStatus(result);
@@ -165,6 +172,7 @@ struct Index {
       else if (result.authUrl) {
         this.progress = '正在打开系统浏览器…';
         await this.openSystemBrowser(result.authUrl);
+        if (!this.mounted) { return; }
         hilog.info(0x5453, 'TailscaleProbe', 'Official login browser dispatched');
         this.awaitingLogin = true;
         this.loginDeadline = Date.now() + 120000;
@@ -188,6 +196,7 @@ struct Index {
     this.progress = '正在退出登录…';
     try {
       const raw: string = await tailscale.logout();
+      if (!this.mounted) { return; }
       this.output = safeOutput(raw);
       const result: ControlResult = readControl(raw);
       if (isAuthenticated(result)) { throw new Error('控制面仍报告已登录，请刷新后重试'); }

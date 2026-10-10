@@ -211,3 +211,93 @@ test('expired login polling is bounded and unmount cancels pending work', () => 
   assert.equal(ui.mounted, false);
   assert.equal(ui.pollTimer, -1);
 });
+
+test('Go-produced status/peer/lifecycle fixtures obey the actual UI decoder contract', (t) => {
+  const dir = process.env.HARMONY_CONTRACT_DIR;
+  if (!dir || !fs.existsSync(path.join(dir, 'running.json'))) {
+    t.skip('run scripts/test-server.sh to generate Go producer fixtures'); return;
+  }
+  const fixture = (name) => fs.readFileSync(path.join(dir, `${name}.json`), 'utf8');
+  assert.equal(model.isAuthenticated(model.readControl(fixture('running'))), true);
+  assert.equal(model.readPeers(fixture('peers')).length, 2);
+  assert.equal(model.readPeers(fixture('emptyPeers')).length, 0);
+  assert.equal(model.readControl(fixture('started')).state, 'started');
+  assert.equal(model.readControl(fixture('closed')).state, 'closed');
+  assert.throws(() => model.readControl(fixture('statusFailure')), /control unavailable/);
+  assert.throws(() => model.readPeers(fixture('groupFailure')), /ACL group/);
+});
+test('malformed native field types are rejected before rendering or browser dispatch', () => {
+  for (const result of [
+    { ...running, loggedIn: 'yes' }, { ...running, backendState: 1 },
+    { ...running, authUrl: 42 }, { ...running, tailscaleIPs: '100.64.1.1' },
+    { ...running, tailnet: null }, { ...running, self: { id: 42, online: true } }
+  ]) assert.throws(() => model.readControl(JSON.stringify(result)));
+  for (const peer of [null, 42, { id: 'a' }, { ...onlinePeer, os: 1 },
+    { ...onlinePeer, tags: 'tag:server' }, { ...onlinePeer, tailscaleIPs: [42] }]) {
+    assert.throws(() => model.readPeers(JSON.stringify({ ok: true, peers: [peer] })));
+  }
+});
+test('browser double failure is visible and does not start login polling', async () => {
+  const { ui } = harness();
+  ui.appContext.openLink = async () => { throw new Error('primary denied'); };
+  ui.appContext.startAbility = async () => { throw new Error('fallback denied'); };
+  await ui.login();
+  assert.equal(ui.awaitingLogin, false);
+  assert.equal(ui.pollTimer, -1);
+  assert.match(ui.message, /primary denied/);
+  assert.match(ui.message, /fallback denied/);
+});
+test('a pending login finishing after unmount must not open the system browser', async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const { ui, calls } = harness({ login: async () => {
+    await pending; return JSON.stringify({ ...loggedOut, authUrl: 'https://login.tailscale.com/a/token' });
+  } });
+  const operation = ui.login();
+  await new Promise((resolve) => setImmediate(resolve));
+  ui.aboutToDisappear();
+  release(); await operation;
+  assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === 'browser'));
+  assert.equal(ui.pollTimer, -1);
+});
+test('device response after unmount is not applied to a detached page', async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const { ui } = harness({ onlinePeers: async () => { await pending; return JSON.stringify({ ok: true, peers: [onlinePeer] }); } });
+  const operation = ui.refreshData();
+  await new Promise((resolve) => setImmediate(resolve));
+  ui.aboutToDisappear();
+  release(); await operation;
+  assert.equal(ui.peers.length, 0);
+  assert.equal(ui.lastUpdated, '');
+});
+test('polling timer advances and stops deterministically without real waiting', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const { ui } = harness({ getStatus: async () => JSON.stringify(loggedOut) });
+  ui.awaitingLogin = true; ui.loginDeadline = 10000;
+  ui.scheduleLoginRefresh();
+  t.mock.timers.tick(2000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.busy, false);
+  assert.notEqual(ui.pollTimer, -1);
+  t.mock.timers.tick(10000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.awaitingLogin, false);
+  assert.equal(ui.pollTimer, -1);
+});
+test('background polling does not issue native requests', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const { ui, calls } = harness();
+  ui.foreground = false; ui.awaitingLogin = true; ui.loginDeadline = 10000;
+  ui.scheduleLoginRefresh(); t.mock.timers.tick(2000);
+  assert.deepEqual(calls, []);
+  ui.aboutToDisappear();
+});
+test('logout/status transitions clear device detail and never leave stale online cards', async () => {
+  const { ui } = harness({ getStatus: async () => JSON.stringify(loggedOut) });
+  ui.status = running; ui.page = 'detail'; ui.selectedPeer = onlinePeer; ui.peers = [onlinePeer];
+  await ui.refreshData();
+  assert.equal(ui.page, 'main');
+  assert.equal(ui.selectedPeer, undefined);
+  assert.deepEqual(ui.peers, []);
+});

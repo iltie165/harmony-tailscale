@@ -3,6 +3,18 @@
 HarmonyOS ARM64 C ABI wrapper and Stage-model client shell for the official
 Tailscale Go core.
 
+## Engineering and tests
+
+```bash
+make test    # offline unit/Mock/race + real host C ABI/NAPI + UI contracts
+make check   # all tests plus actual ARM64/ArkTS/HAP build
+```
+
+No phone, Tailscale account, signing password or new packages are needed.
+See [contribution rules](CONTRIBUTING.md), [architecture](docs/architecture.md)
+and [test boundaries](docs/testing.md). CI configuration is checked in for a
+pre-provisioned HarmonyOS self-hosted runner; it has not been deployed here.
+
 ## Pinned inputs
 
 - Tailscale module: `tailscale.com v1.86.2`
@@ -15,9 +27,10 @@ Tailscale Go core.
 
 Dependencies must already exist in `.cache/gomod`; the build keeps
 `GOPROXY=off` and `-mod=readonly` so the pinned dependency graph cannot change.
-Build and verification containers use host networking and receive the proxy
-from `HARMONY_PROXY_URL` / `HARMONY_ALL_PROXY_URL` (defaulting to the host proxy
-on port 7890), as required by the initial HAP build workflow.
+All normal build/test/verification containers default to offline networking.
+Use `HARMONY_GOMODCACHE` to point to an alternate pre-hydrated absolute module
+cache. Hydration remains a separate explicitly authorized step; builds do not
+install dependencies.
 
 ```bash
 ./scripts/build.sh
@@ -82,9 +95,9 @@ embedded in the project. Short-lived login URLs are returned only to ArkTS for
 opening in the system browser and are redacted from Go/HiLog output.
 
 Interactive login listens for the official IPN Bus `BrowseToURL` notification
-instead of polling a status snapshot. Diagnostics also test HTTPS reachability
-to `controlplane.tailscale.com` so certificate or network failures are reported
-separately from browser-launch failures.
+instead of polling a status snapshot. Diagnostics test the control `/key?v=123` HTTPS endpoint through the netns
+dialer family so transport failures are reported separately from browser launch
+failures and do not repeat the old unrelated default-HTTP probe.
 
 Online peers can be listed without a filter, filtered by ACL tag such as
 `tag:server`, by login/display name with `user:name`, or by hostname text. ACL
@@ -92,15 +105,14 @@ policy groups (`group:example`) are not exposed by the node LocalAPI and require
 a separate management backend using Tailscale OAuth; an OAuth client secret
 must never be embedded in the HAP.
 
-Build the Go library and unsigned debug HAP with the host proxy forwarded into
-the container:
+Build the Go library and unsigned debug HAP offline using existing caches:
 
 ```bash
 ./scripts/build-hap.sh
 ```
 
-Defaults can be overridden with `HARMONY_PROXY_URL` and
-`HARMONY_ALL_PROXY_URL`. Output:
+The first dependency hydration may require an explicitly authorized networked
+step. Routine builds do not access that network. Output:
 
 ```text
 dist/hap/tailscale-probe-unsigned.hap

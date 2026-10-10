@@ -1,0 +1,42 @@
+name: Server and HarmonyOS checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  check:
+    # Provision this trusted runner with the existing images and module cache.
+    # The workflow does not install SDKs, fetch modules, sign, or use a phone.
+    runs-on: [self-hosted, Linux, X64, harmonyos]
+    timeout-minutes: 30
+    env:
+      HARMONY_GOMODCACHE: ${{ vars.HARMONY_CI_MODULE_CACHE || '/opt/harmony-ci/gomod' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/gobuild
+            .cache/gobuild-host
+            .hvigor
+          key: harmonyos-v1-${{ runner.os }}-${{ hashFiles('go.sum', 'oh-package.json5', 'hvigor/hvigor-config.json5') }}
+      - name: Check
+        run: make check
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-check-evidence
+          path: |
+            dist/tests/go.jsonl
+            dist/tests/go.cover
+            dist/tests/go-coverage.txt
+            dist/tests/coverage-summary.json
+            dist/tests/hilog-*.txt
+            dist/hap/tailscale-probe-unsigned.hap

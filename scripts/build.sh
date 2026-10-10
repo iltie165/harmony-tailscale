@@ -3,9 +3,7 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_GO_IMAGE:-harmonyos-go:1.24}
-proxy=${HARMONY_PROXY_URL:-http://127.0.0.1:7890}
-all_proxy=${HARMONY_ALL_PROXY_URL:-socks5://127.0.0.1:7890}
-module_cache="$project_root/.cache/gomod"
+module_cache=${HARMONY_GOMODCACHE:-"$project_root/.cache/gomod"}
 build_cache="$project_root/.cache/gobuild"
 dist_dir="$project_root/dist"
 
@@ -16,15 +14,12 @@ fi
 
 mkdir -p "$build_cache" "$dist_dir"
 
-docker run --rm --network host \
+docker run --rm --pull never --network none \
   -v "$project_root:/workspace" \
   -v "$module_cache:/gomodcache:ro" \
   -v "$build_cache:/gocache" \
   -e GOMODCACHE=/gomodcache \
   -e GOCACHE=/gocache \
-  -e HTTP_PROXY="$proxy" \
-  -e HTTPS_PROXY="$proxy" \
-  -e ALL_PROXY="$all_proxy" \
   -e GOPROXY=off \
   -e GOSUMDB=off \
   -e GOOS=openharmony \

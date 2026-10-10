@@ -3,6 +3,7 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_DEV_IMAGE:-harmonyos-dev:24.04}
+build_network=${HARMONY_BUILD_NETWORK:-none}
 proxy=${HARMONY_PROXY_URL:-http://127.0.0.1:7890}
 all_proxy=${HARMONY_ALL_PROXY_URL:-socks5://127.0.0.1:7890}
 native_lib_dir="$project_root/entry/libs/arm64-v8a"
@@ -14,7 +15,7 @@ mkdir -p "$native_lib_dir" "$native_include_dir"
 cp "$project_root/dist/libtailscale_ohos.so" "$native_lib_dir/libtailscale_ohos.so"
 cp "$project_root/dist/libtailscale_ohos.h" "$native_include_dir/libtailscale_ohos.h"
 
-docker run --rm --network host \
+docker run --rm --pull never --network "$build_network" \
   -e DEVECO_SDK_HOME=/opt/harmony/command-line-tools/sdk \
   -e HTTP_PROXY="$proxy" \
   -e HTTPS_PROXY="$proxy" \

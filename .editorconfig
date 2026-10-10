@@ -1,0 +1,24 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.go]
+indent_style = tab
+
+[*.{ets,ts,cjs,json,json5,yml,yaml,sh,py}]
+indent_style = space
+indent_size = 2
+
+[*.{cpp,h}]
+indent_style = space
+indent_size = 4
+
+[*.py]
+indent_size = 4
+
+[Makefile]
+indent_style = tab

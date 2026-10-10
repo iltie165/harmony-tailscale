@@ -30,12 +30,39 @@ export function readControl(raw: string): ControlResult {
   if (!result || result.ok !== true) {
     throw new Error(result?.error || '无法读取 Tailscale 状态');
   }
+  if ((result.backendState !== undefined && typeof result.backendState !== 'string') ||
+    (result.loggedIn !== undefined && typeof result.loggedIn !== 'boolean') ||
+    (result.authUrl !== undefined && typeof result.authUrl !== 'string') ||
+    (result.tailscaleIPs !== undefined && !validStringArray(result.tailscaleIPs)) ||
+    (result.self !== undefined && !validPeer(result.self)) ||
+    (result.tailnet !== undefined && (!result.tailnet || typeof result.tailnet !== 'object' ||
+      (result.tailnet.name !== undefined && typeof result.tailnet.name !== 'string') ||
+      (result.tailnet.magicDNSSuffix !== undefined && typeof result.tailnet.magicDNSSuffix !== 'string')))) {
+    throw new Error('Tailscale 状态数据格式不正确');
+  }
   return result;
+}
+function validStringArray(values: string[]): boolean {
+  return Array.isArray(values) && values.every((value: string) => typeof value === 'string');
+}
+function validPeer(peer: PeerInfo): boolean {
+  return !!peer && typeof peer === 'object' && typeof peer.id === 'string' &&
+    typeof peer.online === 'boolean' &&
+    (peer.hostName === undefined || typeof peer.hostName === 'string') &&
+    (peer.dnsName === undefined || typeof peer.dnsName === 'string') &&
+    (peer.os === undefined || typeof peer.os === 'string') &&
+    (peer.userLogin === undefined || typeof peer.userLogin === 'string') &&
+    (peer.userName === undefined || typeof peer.userName === 'string') &&
+    (peer.tailscaleIPs === undefined || validStringArray(peer.tailscaleIPs)) &&
+    (peer.tags === undefined || validStringArray(peer.tags));
 }
 export function readPeers(raw: string): PeerInfo[] {
   const result: PeersResult = JSON.parse(raw) as PeersResult;
   if (!result || result.ok !== true || !Array.isArray(result.peers)) {
     throw new Error(result?.error || '无法读取在线设备');
+  }
+  if (!result.peers.every((peer: PeerInfo) => validPeer(peer))) {
+    throw new Error('Tailscale 设备数据格式不正确');
   }
   return result.peers.filter((peer: PeerInfo) => peer.online === true);
 }

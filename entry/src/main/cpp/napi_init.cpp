@@ -85,7 +85,9 @@ bool ReadString(napi_env env, napi_value value, std::string &result)
         return false;
     }
     result.resize(copied);
-    return true;
+    // The C ABI uses NUL-terminated strings; silently accepting a JS string
+    // containing NUL would change paths, hostnames or filters at the boundary.
+    return result.find('\0') == std::string::npos;
 }
 
 void LogLine(const std::string &line)
@@ -111,9 +113,14 @@ void ForwardGoLogs()
     if (text.size() > MAX_FORWARDED_BYTES) {
         begin = text.size() - MAX_FORWARDED_BYTES;
         const size_t nextLine = text.find('\n', begin);
-        if (nextLine != std::string::npos) {
+        if (nextLine != std::string::npos && nextLine + 1 < text.size()) {
             begin = nextLine + 1;
         }
+    }
+    // If the last line alone exceeds the cap, retain its suffix; do not drop
+    // the newest record or split a UTF-8 continuation byte.
+    while (begin < text.size() && (static_cast<unsigned char>(text[begin]) & 0xC0) == 0x80) {
+        ++begin;
     }
     LogLine("Go log tail (newest retained):\n" + text.substr(begin));
 }

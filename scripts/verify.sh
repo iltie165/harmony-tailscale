@@ -3,19 +3,14 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_GO_IMAGE:-harmonyos-go:1.24}
-proxy=${HARMONY_PROXY_URL:-http://127.0.0.1:7890}
-all_proxy=${HARMONY_ALL_PROXY_URL:-socks5://127.0.0.1:7890}
 library="$project_root/dist/libtailscale_ohos.so"
 header="$project_root/dist/libtailscale_ohos.h"
 
 [[ -f "$library" ]] || { echo "missing $library" >&2; exit 1; }
 [[ -f "$header" ]] || { echo "missing $header" >&2; exit 1; }
 
-docker run --rm --network host \
+docker run --rm --pull never --network none \
   -v "$project_root:/workspace:ro" \
-  -e HTTP_PROXY="$proxy" \
-  -e HTTPS_PROXY="$proxy" \
-  -e ALL_PROXY="$all_proxy" \
   -w /workspace \
   "$image" bash -lc '
     set -euo pipefail
@@ -25,6 +20,8 @@ docker run --rm --network host \
     file "$library"
     readelf -h "$library" | tee /tmp/elf-header.txt
     grep -Eq "Machine:[[:space:]]+AArch64" /tmp/elf-header.txt
+    grep -Eq "Class:[[:space:]]+ELF64" /tmp/elf-header.txt
+    grep -Eq "Type:[[:space:]]+DYN" /tmp/elf-header.txt
 
     readelf -Ws "$library" | tee /tmp/elf-symbols.txt >/dev/null
     for symbol in \
@@ -42,6 +39,7 @@ docker run --rm --network host \
       tailscale_ohos_logs \
       tailscale_ohos_string_free; do
       grep -Eq "[[:space:]]${symbol}$" /tmp/elf-symbols.txt
+      grep -wq "$symbol" "$header"
     done
 
     readelf -rW "$library" | tee /tmp/elf-relocations.txt >/dev/null
@@ -66,7 +64,11 @@ docker run --rm --network host \
     echo "Dynamic dependencies:"
     readelf -d "$library" | grep NEEDED || true
     echo "Go module metadata:"
-    go version -m "$library"
+    go version -m "$library" | tee /tmp/go-metadata.txt
+    grep -Eq "dep[[:space:]]+tailscale.com[[:space:]]+v1.86.2([[:space:]]|$)" /tmp/go-metadata.txt
+    grep -Fq "GOOS=openharmony" /tmp/go-metadata.txt
+    grep -Fq "GOARCH=arm64" /tmp/go-metadata.txt
+    grep -Fq "CGO_ENABLED=1" /tmp/go-metadata.txt
     echo "Generated header exports:"
     grep -E "tailscale_ohos_" "$header"
   '
