@@ -1,8 +1,9 @@
 # First release readiness
 
-Assessment: 2026-10-10, source baseline `e7265d4`. This is a plan, not
-verification of new functionality. No VPN implementation or new device evidence
-was produced by this assessment.
+Updated: 2026-10-10, VPN Alpha 3.2.0 implementation. Login/device discovery and
+basic VPN interface capabilities have phone evidence. Real TUN integration,
+service ownership and main ON/OFF are now implemented and host/target verified;
+**new phone traffic acceptance is still outstanding**. See [details](vpn-alpha.md).
 
 ## Confirmed scope
 
@@ -16,8 +17,8 @@ Tailnet destinations; preserve ordinary Internet access and existing system DNS.
 Do not include exit nodes, subnet routing, MagicDNS, IPv6, always-on startup,
 Taildrive, SSH server or policy-group management in the initial promise.
 
-The interim capability probe retains the disabled VPN switch and clearly states
-that it cannot provide system VPN connectivity. See [probe acceptance](vpn-capability-probe.md).
+The interim 3.1.4 probe was phone-confirmed but did not forward packets. The new
+3.2.0 switch starts the actual data path; its diagnostic remains capability-only.
 
 ## Existing evidence
 
@@ -35,10 +36,10 @@ that it cannot provide system VPN connectivity. See [probe acceptance](vpn-capab
 
 | Priority | Work | Exit criterion |
 | --- | --- | --- |
-| P0 | Validate VPN extension/TUN capability on the target phone | User consent, create/read/write/destroy vNIC, denial and resource cleanup verified on API 24 |
-| P0 | Choose and implement Tailscale packet integration | Real TUN packets reach the pinned official engine; no assumption that existing tsnet login provides a system tunnel |
-| P0 | Physical-network exclusion, routes and FD ownership | Control/DERP/discovery traffic avoids recursive VPN routing; supported peer routes installed; descriptors have explicit ownership and failure cleanup |
-| P0 | VPN service lifecycle and UI contract | Core has one authoritative owner; UI reopening does not start a duplicate node; connect/disconnect/revoke/logout failures are explicit; login and tunnel state stay distinct |
+| P0 | Target-phone packet capability | Acquisition, access flags/protection API and cleanup passed in 3.1.4; actual read/write must be accepted in 3.2.0 |
+| Implemented | Official Tailscale packet integration | Real pinned-engine IPv4 TCP/UDP packet encryption/decryption passed offline; phone OS/app flows remain unverified |
+| Implemented / device pending | Physical-network exclusion, routes and FD ownership | Protected extension transport, Tailnet IPv4-only route, duplicate ownership and joined shutdown implemented; actual exclusion/routing awaits phone evidence |
+| Implemented / device pending | VPN lifecycle and UI contract | Single state owner, private LocalAPI, ON/OFF/logout/reconnect and explicit uncertain cleanup implemented/tested; mobile background/revocation still pending |
 | P0 | Real data-path acceptance | Another phone app reaches a Tailnet peer over TCP and UDP; direct and DERP paths, network loss/change, screen-off and stop/start behavior have evidence |
 | P0 | Public artifact and install/upgrade path | Distribution channel, certificate/profile and eligible devices established; version/bundle strategy preserves intended upgrades; signed package and checksum verified |
 | P0 | Release metadata and notices | Choose our own source license, review dependency licenses/notices and unofficial product naming; document supported scope, known limitations and logs/data behavior |
@@ -52,29 +53,29 @@ Mock/host execution is never labelled device VPN evidence.
 
 ## Technical findings behind the order
 
-- `core/backend.go` currently creates `tsnet.Server`. Pinned upstream tsnet
+- `core/backend.go` creates `tsnet.Server` only in discovery mode. Pinned upstream tsnet
   initializes a userspace engine without a real `Tun`, `Router` or `DNS`
   configurator and adds its own netstack. A system-VPN adapter requires a
-  separately validated integration, not just enabling the UI switch.
+  separate integration, now implemented in `service_backend.go`/`packet_tun.go`.
 - `wgengine.Config` in pinned upstream exposes `Tun`, `Router`, `DNS` and
-  `ReconfigureVPN` boundaries. They are candidate integration points, not a
-  completed design. Prefer a platform backend behind our existing ports; do
-  not blindly mutate `tsnet.Server.Sys()`, which upstream calls unstable.
+  `ReconfigureVPN` boundaries. The new backend supplies its real Tun and
+  platform Router and starts ipnlocal directly; it does not mutate tsnet.Sys().
 - The installed SDK declares `VpnExtensionAbility`, `VpnConnection.create`
   returning the vNIC FD and `protect(socketFd)` since API 11.
   `protectProcessNet()` is declared since API 22. Runtime support on our phone
-  still needs proof; do not require the API-26 authorization observer on API 24.
+  completed in the 3.1.4 phone probe; actual physical-traffic exclusion still
+  needs proof. Do not require API-26 authorization observers on API 24.
 - `core/runtime.go` currently disables Linux netns socket controls for the
   proven userspace login path. It is not a VPN bypass/protection adapter.
-- Decide whether the VPN extension shares a process with the UI. A native
-  singleton is process-local; separate processes need explicit ownership/IPC
-  and must not concurrently open the same Tailscale state directory.
-- App metadata still uses `com.ezoo.tailscaleprobe` and version 3.1.0. Public
+- Extension/UI ownership works with either shared or separate native processes:
+  a lifetime state lease and private Unix LocalAPI prevent concurrent state opens.
+- App metadata uses `com.ezoo.tailscaleprobe` and version 3.2.0. Public
   tag naming can differ, but Android-style semantic expectations must not cause
   a downgrade of the HarmonyOS versionCode; changing bundle identity also
   changes signing and app-private state/upgrade behavior.
-- Existing build scripts produce debug probe-named artifacts. A release must
-  not accidentally attach the old generic signed 3.0.6 package as current.
+- Existing build scripts produce debug probe-named artifacts. The fixed signed
+  name is kept for the user's download workflow; older packages are backed up.
+  A public release still needs its own manifest and generally usable signing.
 
 ## Implementation sequence
 

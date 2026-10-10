@@ -25,6 +25,9 @@ enum class AsyncOperation {
     Diagnostics,
     Close,
     InspectVpnDescriptor,
+    StartVpn,
+    VpnStatus,
+    NetworkChanged,
 };
 
 struct AsyncContext {
@@ -34,6 +37,7 @@ struct AsyncContext {
     AsyncOperation operation = AsyncOperation::Start;
     std::string dataDir;
     std::string hostname;
+    std::string address;
     std::string filter;
     std::string result;
     std::string error;
@@ -141,6 +145,9 @@ const char *OperationName(AsyncOperation operation)
         case AsyncOperation::Diagnostics: return "diagnostics";
         case AsyncOperation::Close: return "close";
         case AsyncOperation::InspectVpnDescriptor: return "inspectVpnDescriptor";
+        case AsyncOperation::StartVpn: return "startVpn";
+        case AsyncOperation::VpnStatus: return "vpnStatus";
+        case AsyncOperation::NetworkChanged: return "networkChanged";
     }
     return "unknown";
 }
@@ -173,6 +180,17 @@ void ExecuteAsync(napi_env, void *data)
             context->result = TakeGoString(tailscale_ohos_start(
                 const_cast<char *>(context->dataDir.c_str()),
                 const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::StartVpn:
+            context->result = TakeGoString(tailscale_ohos_start_vpn(
+                const_cast<char *>(context->dataDir.c_str()), const_cast<char *>(context->hostname.c_str()),
+                const_cast<char *>(context->address.c_str()), context->descriptor));
+            break;
+        case AsyncOperation::VpnStatus:
+            context->result = TakeGoString(tailscale_ohos_vpn_status());
+            break;
+        case AsyncOperation::NetworkChanged:
+            context->result = TakeGoString(tailscale_ohos_network_changed());
             break;
         case AsyncOperation::Status:
             context->result = TakeGoString(tailscale_ohos_status());
@@ -279,6 +297,40 @@ napi_value GetStatus(napi_env env, napi_callback_info)
     return QueueAsync(env, context, "tailscaleStatus");
 }
 
+napi_value StartVpn(napi_env env, napi_callback_info info)
+{
+    size_t argc = 5;
+    napi_value argv[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+    double descriptor = -1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto *context = new AsyncContext();
+    if (argc != 4 || !ReadString(env, argv[0], context->dataDir) ||
+        !ReadString(env, argv[1], context->hostname) || !ReadString(env, argv[2], context->address) ||
+        napi_get_value_double(env, argv[3], &descriptor) != napi_ok || !std::isfinite(descriptor) ||
+        descriptor < 0 || descriptor > INT_MAX || std::floor(descriptor) != descriptor) {
+        delete context;
+        napi_throw_type_error(env, nullptr, "startVpn(dir, hostname, ipv4, fd) requires three strings and a nonnegative integer");
+        return nullptr;
+    }
+    context->operation = AsyncOperation::StartVpn;
+    context->descriptor = static_cast<int>(descriptor);
+    return QueueAsync(env, context, "tailscaleStartVpn");
+}
+
+napi_value VpnStatus(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::VpnStatus;
+    return QueueAsync(env, context, "tailscaleVpnStatus");
+}
+
+napi_value NetworkChanged(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::NetworkChanged;
+    return QueueAsync(env, context, "tailscaleNetworkChanged");
+}
+
 napi_value Login(napi_env env, napi_callback_info)
 {
     auto *context = new AsyncContext();
@@ -368,6 +420,9 @@ napi_value Init(napi_env env, napi_value exports)
         {"diagnostics", nullptr, Diagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"close", nullptr, Close, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"inspectVpnDescriptor", nullptr, InspectDescriptor, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"startVpn", nullptr, StartVpn, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getVpnStatus", nullptr, VpnStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"networkChanged", nullptr, NetworkChanged, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     return exports;

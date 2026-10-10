@@ -35,7 +35,7 @@ func panicResult(operation string, output **C.char) {
 		message := fmt.Sprintf("panic: %v", recovered)
 		stack := string(debug.Stack())
 		appendLog("%s\n%s", message, stack)
-		if operation == "start" || operation == "close" {
+		if operation == "start" || operation == "startVpn" || operation == "close" {
 			lifecycle.Lock()
 			lifecycle.state = "panic"
 			lifecycle.lastError = message
@@ -80,6 +80,24 @@ func tailscale_ohos_core_probe() C.int {
 func tailscale_ohos_start(cDataDir, cHostname *C.char) (output *C.char) {
 	defer panicResult("start", &output)
 	return cJSON(startCore(C.GoString(cDataDir), C.GoString(cHostname)))
+}
+
+//export tailscale_ohos_start_vpn
+func tailscale_ohos_start_vpn(cDataDir, cHostname, cAddress *C.char, fd C.int) (output *C.char) {
+	defer panicResult("startVpn", &output)
+	return cJSON(startVpnCore(C.GoString(cDataDir), C.GoString(cHostname), C.GoString(cAddress), int(fd)))
+}
+
+//export tailscale_ohos_vpn_status
+func tailscale_ohos_vpn_status() (output *C.char) {
+	defer panicResult("vpnStatus", &output)
+	return cJSON(vpnStateCore())
+}
+
+//export tailscale_ohos_network_changed
+func tailscale_ohos_network_changed() (output *C.char) {
+	defer panicResult("networkChanged", &output)
+	return cJSON(networkChangedCore())
 }
 
 //export tailscale_ohos_status

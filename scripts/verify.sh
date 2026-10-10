@@ -30,6 +30,9 @@ docker run --rm --pull never --network none \
       tailscale_ohos_go_version \
       tailscale_ohos_core_probe \
       tailscale_ohos_start \
+      tailscale_ohos_start_vpn \
+      tailscale_ohos_vpn_status \
+      tailscale_ohos_network_changed \
       tailscale_ohos_status \
       tailscale_ohos_login \
       tailscale_ohos_logout \

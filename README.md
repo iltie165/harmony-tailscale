@@ -52,7 +52,7 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
-### Client UI and 3.1.1 VPN capability probe
+### Client UI and 3.2.0 VPN Alpha
 
 The Chinese-language client UI separates the welcome/login screen from the
 signed-in device list. It displays the real account, Tailnet, local Tailscale
@@ -61,11 +61,18 @@ details. Returning from browser authentication refreshes the session automatical
 Existing sessions are restored on launch; bounded polling handles asynchronous
 backend startup. Settings contains diagnostics and selectable raw results.
 
-The VPN switch is deliberately disabled and labelled **尚未接入**: userspace
-`tsnet` authentication is not full-device VPN connectivity. Version 3.1.1 adds
-an opt-in diagnostic VPN extension: create a temporary vNIC with no routes or
-DNS overrides, inspect its descriptor, request physical-network process
-protection, and close/destroy it. It does not forward any Tailnet packets.
+The main VPN switch now starts a user-authorized VPN extension with the node's
+assigned IPv4, Tailnet-only route and the official WireGuard engine. OFF preserves
+login and destroys the owned interface after joining packet I/O. UI/extension
+ownership uses a state lease and private Unix LocalAPI, not duplicate nodes.
+No default route or system DNS override is installed. MagicDNS, IPv6, exit nodes
+and subnet routes are outside this Alpha. Host encrypted packet tests and actual
+target builds passed; new phone traffic/background/network acceptance remains
+separate. See [VPN Alpha and testing](docs/vpn-alpha.md).
+
+The opt-in diagnostic remains available separately: a temporary vNIC with no
+routes or DNS override, descriptor/protection checks, and automatic cleanup.
+It does not forward Tailnet packets and cannot run alongside the real VPN.
 The diagnostic is under **设置 → 诊断与日志 → 验证系统 VPN 能力**.
 See [probe acceptance and verification](docs/vpn-capability-probe.md).
 
@@ -82,14 +89,16 @@ stale-device clearing, logout and navigation. They do **not** render ArkUI or
 replace device layout/browser/network acceptance. Hvigor separately compiles
 the complete ArkUI builders.
 
-The current diagnostic artifact is `dist/hap/tailscale-vpn-capability-3.1.1-unsigned.hap`. Signing requires
-the transient P12 password, which has intentionally not been saved. The generic
-signed HAP may still be **3.0.6**, not 3.1.0.
+The current fixed signed artifact is `dist/hap/tailscale-probe-signed.hap`,
+version **3.2.0**. Its existing device-scoped debug signing materials are outside
+the repository; passwords are used transiently, never stored in code or Git.
 
 The `entry` module implements this call chain:
 
 ```text
-ArkTS UI -> NAPI async work -> Go C ABI -> tsnet.Server
+Discovery: ArkTS UI -> NAPI worker -> Go C ABI -> tsnet.Server
+VPN: ArkTS extension -> NAPI worker -> Go C ABI -> wgengine/ipnlocal <-> TUN
+UI: private Unix LocalAPI -> authoritative VPN owner
 ```
 
 It provides native version/core checks, asynchronous `tsnet.Server.Start`,

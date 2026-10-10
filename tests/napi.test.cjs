@@ -113,6 +113,11 @@ test('production NAPI module registers exactly the TypeScript contract', () => {
   assert.equal(version.coreProbe, true);
 });
 test('wrong argument counts and types are rejected before entering C ABI', () => {
+  for (const args of [[], ['/tmp', 'host', '100.64.1.1'], ['/tmp', 'host', '100.64.1.1', -1],
+    ['/tmp', 'host', '100.64.1.1', 1.5], ['/tmp', 'host', '100.64.1.1', Infinity],
+    ['/tmp', 'a\0b', '100.64.1.1', 1], ['/tmp', 'host', 42, 1], ['/tmp', 'host', '100.64.1.1', 1, 'extra']]) {
+    assert.throws(() => native.startVpn(...args), TypeError);
+  }
   for (const args of [[], ['/tmp'], [1, 'host'], ['/tmp', null], ['/tmp', 'a\0b'], ['/tmp\0elsewhere', 'host']]) {
     assert.throws(() => native.start(...args), TypeError);
   }
@@ -120,6 +125,15 @@ test('wrong argument counts and types are rejected before entering C ABI', () =>
     assert.throws(() => native[fn](), TypeError);
     assert.throws(() => native[fn](42), TypeError);
   }
+});
+test('VPN NAPI startup and independent status use the real async ABI', async () => {
+  const result = await parse(native.startVpn('relative', 'host', '100.64.1.1', 2147483647));
+  assert.equal(result.operation, 'startVpn');
+  assert.equal(result.ok, !real);
+  const status = await parse(native.getVpnStatus());
+  assert.equal(status.connected, false);
+  assert.equal(status.state, 'disconnected');
+  assert.equal(status.txPackets, 0);
 });
 test('async methods return real Promises and the proper operation JSON', async () => {
   for (const [name, args, operation] of [

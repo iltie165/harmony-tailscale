@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net"
+	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
@@ -29,6 +31,22 @@ type backend interface {
 type tsnetBackend struct{ *tsnet.Server }
 type localAdapter struct{ *local.Client }
 
+func (b tsnetBackend) Start() error {
+	if err := b.Server.Start(); err != nil {
+		return err
+	}
+	client, err := b.Server.LocalClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// No system DNS integration in this Alpha. Do not request split DNS from
+	// the Linux/no-op configurator even in discovery-only mode.
+	_, err = client.EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{CorpDNS: false}, CorpDNSSet: true})
+	return err
+}
+
 func (b tsnetBackend) LocalClient() (controlClient, error) {
 	c, err := b.Server.LocalClient()
 	if err != nil {
@@ -42,5 +60,9 @@ func (c localAdapter) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) 
 
 // Only replaced in serialized unit tests. No test hooks are exported in the ABI.
 var newBackend = func(dir, hostname string) backend {
-	return tsnetBackend{&tsnet.Server{Dir: dir, Hostname: hostname, Logf: bridgeLogf, UserLogf: bridgeLogf}}
+	if conn, err := net.DialTimeout("unix", serviceSocket(dir), time.Second); err == nil {
+		conn.Close()
+		return remoteService(dir)
+	}
+	return &leasedBackend{backend: tsnetBackend{&tsnet.Server{Dir: dir, Hostname: hostname, Logf: bridgeLogf, UserLogf: bridgeLogf}}, dir: dir}
 }

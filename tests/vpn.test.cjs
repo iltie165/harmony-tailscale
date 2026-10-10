@@ -18,6 +18,7 @@ function compile(name, dependencies = {}) {
 }
 const model = compile('VpnProbeModel');
 const client = compile('VpnProbeClient', { './VpnProbeModel': model });
+const sessionModel = compile('VpnSessionModel');
 const inspected = JSON.stringify({ ok: true, descriptorValid: true, readWriteDescriptor: true });
 function port(overrides = {}) {
   const calls = [];
@@ -327,7 +328,8 @@ test('extension executes actual SDK configuration with no Tailnet/default route 
     '@kit.NetworkKit': { VpnExtensionAbility: class {}, vpnExtension: { createVpnConnection: () => connection } },
     '@kit.CoreFileKit': { fileIo }, '@kit.PerformanceAnalysisKit': { hilog: { info() {}, error() {} } },
     'libtailscale_napi.so': { default: { inspectVpnDescriptor: async () => inspected } },
-    './VpnProbeModel': model, './VpnProbeStore': store
+    './VpnProbeModel': model, './VpnProbeStore': store,
+    './VpnSessionModel': sessionModel, './VpnSessionPlatform': {}, './VpnSessionStore': {}
   }).default;
   const instance = new ability();
   instance.context = { filesDir: '/private' };

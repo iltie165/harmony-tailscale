@@ -23,6 +23,9 @@ extern "C" char *tailscale_ohos_start(char *, char *host) {
     return Owned(R"({"ok":true,"operation":"start","state":"started"})");
 }
 extern "C" char *tailscale_ohos_status() { return Owned(R"({"ok":true,"operation":"status","backendState":"Running","loggedIn":true})"); }
+extern "C" char *tailscale_ohos_start_vpn(char *, char *, char *, int) { return Owned(R"({"ok":true,"operation":"startVpn","state":"started"})"); }
+extern "C" char *tailscale_ohos_vpn_status() { return Owned(R"({"ok":true,"connected":false,"state":"disconnected","ipv4":"","txPackets":0,"rxPackets":0,"txBytes":0,"rxBytes":0,"error":""})"); }
+extern "C" char *tailscale_ohos_network_changed() { return Owned(R"({"ok":true,"operation":"networkChanged","state":"started"})"); }
 extern "C" char *tailscale_ohos_login() { return Owned(R"({"ok":true,"operation":"login","authUrl":"https://login.tailscale.com/a/private-native-token"})"); }
 extern "C" char *tailscale_ohos_logout() { return Owned(R"({"ok":true,"operation":"logout","loggedIn":false})"); }
 extern "C" char *tailscale_ohos_close() { return Owned(R"({"ok":true,"operation":"close","state":"closed"})"); }

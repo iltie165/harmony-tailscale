@@ -4,8 +4,10 @@
 
 - Read target code before editing. Do not change host packages, Docker images,
   signing configuration, module versions or upstream sources implicitly.
-- Pinned upstream is `tailscale.com v1.86.2`. Production factory in
-  `core/backend.go` uses upstream tsnet/LocalClient; fakes are confined to tests.
+- Pinned upstream is `tailscale.com v1.86.2`. Discovery uses tsnet/LocalClient;
+  VPN uses official wgengine/ipnlocal with the platform TUN adapter. A state
+  lease prevents duplicate owners; UI uses the owner's private Unix LocalAPI.
+  Fakes and permissive test-only packet filters are confined to tests.
 - `core/main.go`: C exports, owned-string conversion, panic recovery. No business
   state machine here. `login.go`: IPN flow; `operations.go`: lifecycle/queries;
   `status.go`/`types.go`: response contracts; `logging.go`: bounded sanitized logs;
@@ -19,7 +21,10 @@
   short-circuits are retained. Watchers and response bodies must always close.
 - Native/UI errors must not become successful empty lists. Unmounted views must
   not apply asynchronous results or open a browser. VPN status must never be
-  inferred from authentication; system VPN is not implemented yet.
+  inferred from authentication. VPN ON requires the real interface, process
+  protection and owner's independent state; cleanup failures remain visible.
+  Do not start discovery until VPN cleanup releases the state lease. Go owns
+  only a duplicated FD; never rely on fstat on a phone VPN descriptor.
 - Keep login URLs, private keys and signing passwords out of source/logs. Login
   URLs are returned only for browser dispatch; all log entrypoints redact them.
 

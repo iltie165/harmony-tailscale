@@ -21,6 +21,10 @@ const vpnModel = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn
 const vpnClient = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnProbeClient.ets'), 'utf8'), 'vpn-client.cjs', {
   './VpnProbeModel': vpnModel
 });
+const sessionModel = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnSessionModel.ets'), 'utf8'), 'session-model.cjs');
+const sessionClient = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnSessionClient.ets'), 'utf8'), 'session-client.cjs', {
+  './VpnSessionModel': sessionModel
+});
 const loggedOut = { ok: true, backendState: 'NeedsLogin', loggedIn: false };
 const running = {
   ok: true, backendState: 'Running', loggedIn: true, tailscaleIPs: ['100.64.1.1'],
@@ -28,8 +32,29 @@ const running = {
   tailnet: { name: 'test.net', magicDNSSuffix: 'test.ts.net' }
 };
 const onlinePeer = { id: 'one', online: true, hostName: 'test-host', os: 'linux', tailscaleIPs: ['100.64.1.2'] };
-function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}) {
+function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, sessionOverrides = {}) {
   const calls = [];
+  let sessionLive = false;
+  let sessionReport;
+  class PlatformSessionRequest {
+    constructor(_dir, id, ip) { this.id = id; this.ip = ip; }
+    async start() {
+      calls.push('vpnStart'); sessionLive = true;
+      sessionReport = Object.assign(new sessionModel.VpnSessionReport(), {
+        requestId: this.id, ipv4: this.ip, state: 'connected', stage: 'connected', connected: true,
+        created: true, processProtected: true, descriptorClosed: true
+      });
+      if (sessionOverrides.start) await sessionOverrides.start(this, sessionReport);
+    }
+    async stop() { calls.push('vpnStop'); if (sessionOverrides.stop) await sessionOverrides.stop(); }
+    read() { return sessionReport ? JSON.stringify(sessionReport) : ''; }
+    requestStop(id) {
+      calls.push(['vpnStopCommand', id]); sessionLive = false;
+      Object.assign(sessionReport, { connected: false, state: 'disconnected', stage: 'stopped', coreClosed: true, destroyed: true });
+      if (sessionOverrides.cleanup) Object.assign(sessionReport, sessionOverrides.cleanup);
+    }
+    async delay() {}
+  }
   const probeCalls = [];
   let probeId = '';
   const vpnExtension = {
@@ -51,12 +76,15 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}) {
     './VpnProbeStore': { vpnProbePath: (dir) => `${dir}/vpn-capability-probe.json` }
   });
   const native = {
+    getVpnStatus: async () => JSON.stringify(Object.assign(new sessionModel.VpnState(), sessionLive ? {
+      connected: true, state: 'connected', ipv4: '100.64.1.1', txPackets: 1, rxPackets: 2
+    } : {})),
     start: async () => { calls.push('start'); return JSON.stringify({ ok: true, state: 'started' }); },
     getStatus: async () => { calls.push('status'); return JSON.stringify(running); },
     onlinePeers: async (filter) => { calls.push(['peers', filter]); return JSON.stringify({ ok: true, peers: [onlinePeer] }); },
     login: async () => { calls.push('login'); return JSON.stringify({ ...loggedOut, authUrl: 'https://login.tailscale.com/a/private' }); },
     logout: async () => JSON.stringify(loggedOut),
-    close: async () => JSON.stringify({ ok: true, state: 'closed' }),
+    close: async () => { calls.push('close'); return JSON.stringify({ ok: true, state: 'closed' }); },
     ...overrides
   };
   const emitter = { on() {}, off() {}, emit() {} };
@@ -73,7 +101,9 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}) {
     '@kit.PerformanceAnalysisKit': { hilog: { info() {} } },
     'libtailscale_napi.so': { default: native }, './ClientModel': model,
     '../vpn/VpnProbeClient': vpnClient,
-    '../vpn/VpnProbePlatform': platform
+    '../vpn/VpnProbePlatform': platform,
+    '../vpn/VpnSessionModel': sessionModel, '../vpn/VpnSessionClient': sessionClient,
+    '../vpn/VpnSessionRequest': { PlatformSessionRequest }
   });
   const ui = new Index();
   ui.mounted = true;
@@ -85,6 +115,67 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}) {
   };
   return { ui, calls, probeCalls };
 }
+
+test('main VPN toggle hands off discovery, reads independent live state, and OFF retains login', async () => {
+  const { ui, calls } = harness(); ui.status = running;
+  await ui.setVpn(true);
+  assert.deepEqual(calls.slice(0, 3), ['close', 'vpnStart', 'start']);
+  assert.equal(ui.vpn.connected, true); assert.equal(ui.vpn.rxPackets, 2);
+  assert.equal(ui.vpnNeedsCleanup, false); assert.equal(ui.busy, false);
+  assert.ok(ui.vpnTimer !== -1);
+  await ui.setVpn(false);
+  assert.equal(ui.vpn.connected, false); assert.equal(ui.vpnNeedsCleanup, false);
+  assert.equal(ui.status.loggedIn, true); assert.equal(ui.peers.length, 1);
+  assert.ok(calls.includes('vpnStop')); assert.ok(calls.some((x) => Array.isArray(x) && x[0] === 'vpnStopCommand'));
+  assert.match(ui.message, /登录已保留/); ui.aboutToDisappear();
+});
+test('VPN toggle requires authenticated assigned IPv4 and suppresses duplicate busy actions', async () => {
+  for (const status of [loggedOut, { ...running, tailscaleIPs: ['fd7a::1'] }]) {
+    const { ui, calls } = harness(); ui.status = status;
+    await ui.setVpn(true); assert.equal(ui.vpn.connected, false); assert.ok(!calls.includes('vpnStart'));
+    assert.match(ui.message, /登录|IPv4/);
+  }
+  const { ui, calls } = harness(); ui.status = running; ui.busy = true;
+  await ui.setVpn(true); assert.deepEqual(calls, []);
+});
+test('failed OFF leaves shutdown uncertain and retryable; it does not resume another core', async () => {
+  const { ui, calls } = harness({}, {}, {}, { cleanup: { ok: false, stage: 'failed', state: 'error', coreClosed: false, error: 'core shutdown failed' } });
+  ui.status = running; await ui.setVpn(true); calls.length = 0;
+  await ui.setVpn(false);
+  assert.equal(ui.vpnNeedsCleanup, true); assert.equal(ui.vpn.ok, false);
+  assert.match(ui.message, /尚未确认关闭/); assert.ok(!calls.includes('start')); assert.ok(!calls.includes('close'));
+  ui.aboutToDisappear();
+});
+
+test('failure to read peers after VPN startup never closes the owner or starts a competing discovery core', async () => {
+  const { ui, calls } = harness({ onlinePeers: async () => { throw new Error('peer query timed out'); } });
+  ui.status = running; await ui.setVpn(true);
+  assert.equal(ui.vpnNeedsCleanup, true); assert.match(ui.message, /尚未确认关闭/);
+  assert.equal(calls.filter((c) => c === 'close').length, 1);
+  assert.equal(calls.filter((c) => c === 'start').length, 1);
+  assert.ok(!calls.includes('vpnStop')); ui.aboutToDisappear();
+});
+test('VPN rejects conflicting diagnostic/probe controls and unmount does not turn it off', async () => {
+  const { ui, calls } = harness(); ui.status = running; await ui.setVpn(true);
+  calls.length = 0; await ui.diagnostic('close'); assert.match(ui.output, /主界面开关/);
+  ui.confirmVpnProbe(); assert.match(ui.message, /先关闭 VPN/);
+  ui.aboutToDisappear(); assert.deepEqual(calls, []); assert.equal(ui.vpn.connected, true);
+});
+
+test('temporarily reconnecting VPN remains ON and can still be explicitly disconnected', async () => {
+  const { ui, calls } = harness(); ui.status = running; await ui.setVpn(true);
+  ui.vpn.connected = false; ui.vpn.state = 'connecting';
+  assert.equal(ui.vpnRunning(), true);
+  ui.confirmVpnProbe(); assert.match(ui.message, /先关闭/);
+  await ui.setVpn(false); assert.ok(calls.includes('vpnStop')); assert.equal(ui.vpnRunning(), false);
+  ui.aboutToDisappear();
+});
+test('logging out while VPN is active confirms shutdown before deleting login state', async () => {
+  const { ui, calls } = harness({ logout: async () => { calls.push('logout'); return JSON.stringify(loggedOut); } });
+  ui.status = running; await ui.setVpn(true); await ui.logout();
+  assert.ok(calls.indexOf('vpnStop') < calls.indexOf('logout'));
+  assert.equal(ui.vpn.connected, false); assert.equal(ui.status.loggedIn, false); ui.aboutToDisappear();
+});
 
 test('VPN diagnostic UI preserves login and never treats capability success as tunnel connectivity', async () => {
   const { ui, calls, probeCalls } = harness();

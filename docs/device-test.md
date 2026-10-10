@@ -2,7 +2,17 @@
 
 ## Current status
 
-Version 3.0.6 official login and online peers have been confirmed on the user's
+Current device-test build is **3.2.0 VPN Alpha**. Use the fixed signed name
+`tailscale-probe-signed.hap`; preserve login by cover-installing. Follow the
+[VPN data-path acceptance](vpn-alpha.md#focused-phone-acceptance), including real
+TCP/UDP apps, ordinary Internet, OFF, background and network transitions.
+3.1.4's basic interface probe was phone-confirmed; **3.2.0 traffic is not yet
+phone-confirmed**. Signing materials are in `~/harmony-signing` and the existing
+authorized password is reused transiently; it is not missing.
+
+The sections below preserve the earlier 3.0.6/3.1.0 acceptance procedure.
+
+Version 3.0.6 official login and online peers were confirmed on the user's
 real HarmonyOS phone. Version 3.1.0 implements the redesigned UI and has passed
 host Mock tests, ArkTS compilation and HAP native-payload verification. Its
 layout and automatic foreground refresh await device validation. The new package

@@ -11,6 +11,10 @@ import (
 )
 
 func startCore(dataDir, hostname string) operationResult {
+	return startWithBackend(dataDir, hostname, newBackend)
+}
+
+func startWithBackend(dataDir, hostname string, factory func(string, string) backend) operationResult {
 	operationMu.Lock()
 	defer operationMu.Unlock()
 
@@ -32,7 +36,7 @@ func startCore(dataDir, hostname string) operationResult {
 		lifecycle.Unlock()
 		return result
 	}
-	server := newBackend(dataDir, hostname)
+	server := factory(dataDir, hostname)
 	lifecycle.server = server
 	lifecycle.state = "starting"
 	lifecycle.dataDir = dataDir

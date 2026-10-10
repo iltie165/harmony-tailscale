@@ -4,6 +4,9 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
 import { requestVpnProbe } from '../vpn/VpnProbeClient';
 import { PlatformVpnProbeRequest } from '../vpn/VpnProbePlatform';
+import { VpnState, VpnSessionReport, readVpnState, tailnetIPv4 } from '../vpn/VpnSessionModel';
+import { startVpnSession, stopVpnSession, vpnSdkPending, boundedVpn, VpnSessionError } from '../vpn/VpnSessionClient';
+import { PlatformSessionRequest } from '../vpn/VpnSessionRequest';
 import { ControlResult, PeerInfo, readControl, readPeers, isAuthenticated,
   accountName, tailnetName, peerName, peerAddress, osLabel, safeOutput } from './ClientModel';
 
@@ -27,6 +30,11 @@ struct Index {
   @State private showFilter: boolean = false;
   @State private lastUpdated: string = '';
   @State private awaitingLogin: boolean = false;
+  @State private vpn: VpnState = new VpnState();
+  @State private vpnChanging: boolean = false;
+  @State private vpnNeedsCleanup: boolean = false;
+  private vpnTimer: number = -1;
+  private vpnRequestId: string = '';
   private dataDir: string = '';
   private appContext: common.UIAbilityContext | undefined = undefined;
   private pollTimer: number = -1;
@@ -52,6 +60,7 @@ struct Index {
   aboutToDisappear(): void {
     this.mounted = false;
     this.stopPolling();
+    if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
     emitter.off('tailscale.foreground', this.foregroundCallback);
     emitter.off('tailscale.background', this.backgroundCallback);
   }
@@ -100,6 +109,10 @@ struct Index {
   }
 
   private async loadData(): Promise<void> {
+    const vpnRaw: string = await tailscale.getVpnStatus();
+    if (!this.mounted) { return; }
+    this.vpn = readVpnState(vpnRaw);
+    if (!this.vpn.ok) { this.vpnNeedsCleanup = true; throw new Error(this.vpn.error || 'VPN service unavailable'); }
     const raw: string = await tailscale.getStatus();
     if (!this.mounted) { return; }
     this.output = safeOutput(raw);
@@ -111,6 +124,83 @@ struct Index {
       this.peers = readPeers(peerRaw);
       this.lastUpdated = new Date().toLocaleTimeString();
     }
+    this.scheduleVpnRefresh();
+  }
+
+  private scheduleVpnRefresh(): void {
+    if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
+    if (!this.mounted || !this.vpnRunning()) { return; }
+    this.vpnTimer = setTimeout(() => {
+      this.vpnTimer = -1;
+      if (this.foreground && !this.busy) { this.refreshData(); }
+      else { this.scheduleVpnRefresh(); }
+    }, 5000);
+  }
+
+  private vpnRunning(): boolean {
+    return this.vpn.connected || this.vpnNeedsCleanup || (this.vpn.state === 'connecting' && tailnetIPv4(this.vpn.ipv4));
+  }
+
+  private async disconnectVpn(): Promise<void> {
+    if (!this.appContext) { throw new Error('UI context unavailable'); }
+    const port = new PlatformSessionRequest(this.appContext.filesDir);
+    const raw = port.read();
+    const report = raw ? JSON.parse(raw) as VpnSessionReport : undefined;
+    const id = report?.requestId || this.vpnRequestId;
+    if (!id) { throw new Error('Cannot identify VPN owner; use system VPN settings to disconnect'); }
+    await stopVpnSession(port, id);
+    this.vpnNeedsCleanup = false;
+    // Close the UI proxy, never log out. Resume the discovery-only backend
+    // after the service has joined its engine and released the state lease.
+    readControl(await tailscale.close());
+    this.vpn = new VpnState(); this.vpnRequestId = '';
+    readControl(await tailscale.start(this.dataDir, this.hostname));
+  }
+
+  private async setVpn(enabled: boolean): Promise<void> {
+    if (this.busy || this.vpnChanging || (enabled === this.vpnRunning() && !this.vpnNeedsCleanup)) { return; }
+    this.busy = true; this.vpnChanging = true; this.message = '';
+    try {
+      if (vpnSdkPending()) { throw new Error('Previous VPN SDK operation is still pending'); }
+      if (enabled) {
+        if (this.vpnNeedsCleanup) { throw new Error('请先关闭 VPN，完成上一次清理'); }
+        if (!isAuthenticated(this.status) || !this.appContext) { throw new Error('请先完成登录'); }
+        const ipv4 = this.status.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip));
+        if (!ipv4) { throw new Error('未取得本机 Tailnet IPv4，请刷新后重试'); }
+        this.progress = '正在将核心交给 VPN 服务…';
+        readControl(await tailscale.close());
+        const id = `${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
+        this.vpnRequestId = id;
+        this.vpnNeedsCleanup = true;
+        const port = new PlatformSessionRequest(this.appContext.filesDir, id, ipv4, this.hostname);
+        await startVpnSession(port, id, () => !this.mounted, (stage: string) => {
+          if (this.mounted) { this.progress = `正在连接 VPN：${stage}`; }
+        });
+        readControl(await boundedVpn(tailscale.start(this.dataDir, this.hostname), 10000, 'Connect VPN LocalAPI'));
+        if (!this.mounted) { return; }
+        await this.loadData();
+        if (!this.vpn.connected) { throw new Error('VPN 服务尚未确认数据通路已启动'); }
+        this.vpnNeedsCleanup = false;
+        this.message = 'VPN 已开启。请通过 100.x 地址测试其他设备的服务。';
+      } else {
+        this.vpnNeedsCleanup = true;
+        this.progress = '正在断开 VPN 并恢复普通网络…';
+        await this.disconnectVpn();
+        if (this.mounted) { await this.loadData(); this.message = 'VPN 已关闭，登录已保留。'; }
+      }
+    } catch (error) {
+      if (this.mounted) {
+        if (error instanceof VpnSessionError) { this.vpnNeedsCleanup = !error.cleanupConfirmed; }
+        this.vpn.ok = false; this.vpn.state = 'error'; this.vpn.error = `${error}`;
+        this.message = `VPN 操作失败：${error}`;
+        // Startup denial/failure must not make normal account operations
+        // unusable. The lease prevents reopening while cleanup is unfinished.
+        if (!this.vpnNeedsCleanup) {
+          try { readControl(await tailscale.close()); readControl(await tailscale.start(this.dataDir, this.hostname)); }
+          catch (restoreError) { this.message += `；核心恢复：${restoreError}`; }
+        } else { this.message += '；尚未确认关闭，请再次关闭开关，或在系统 VPN 设置中断开。'; }
+      }
+    } finally { this.busy = false; this.vpnChanging = false; this.scheduleVpnRefresh(); }
   }
 
   private async restoreSession(): Promise<void> {
@@ -197,6 +287,7 @@ struct Index {
     this.busy = true;
     this.progress = '正在退出登录…';
     try {
+      if (this.vpnRunning()) { await this.disconnectVpn(); }
       const raw: string = await tailscale.logout();
       if (!this.mounted) { return; }
       this.output = safeOutput(raw);
@@ -217,6 +308,9 @@ struct Index {
     this.busy = true;
     this.progress = '正在执行诊断…';
     try {
+      if (this.vpnRunning() && (operation === 'close' || operation === 'start')) {
+        throw new Error('VPN 运行期间请使用主界面开关管理核心');
+      }
       if (operation === 'versions') { this.output = safeOutput(tailscale.getVersion()); }
       else if (operation === 'logs') { this.output = safeOutput(tailscale.getLogs()); }
       else if (operation === 'browser') {
@@ -234,7 +328,7 @@ struct Index {
         this.output = safeOutput(await tailscale.start(this.dataDir, this.hostname));
       } else if (operation === 'status') {
         const raw: string = await tailscale.getStatus();
-        this.output = safeOutput(raw);
+        this.output = `${safeOutput(raw)}\nVPN：\n${safeOutput(await tailscale.getVpnStatus())}`;
         this.applyStatus(readControl(raw));
       } else { this.output = safeOutput(await tailscale.diagnostics(this.dataDir)); }
     } catch (error) { this.output = `诊断失败：${error}`; }
@@ -242,6 +336,7 @@ struct Index {
   }
 
   private confirmVpnProbe(): void {
+    if (this.vpnRunning() || this.vpnChanging || vpnSdkPending()) { this.message = '请先关闭 VPN 再运行能力检查。'; return; }
     this.getUIContext().showAlertDialog({
       title: '验证系统 VPN 能力？',
       message: '系统将请求 VPN 授权，可能替换其他正在使用的 VPN。此检查仅验证网卡和网络保护接口，不接管 Tailnet 或默认路由，完成后自动关闭。',
@@ -251,6 +346,7 @@ struct Index {
   }
 
   private async runVpnProbe(): Promise<void> {
+    if (this.vpnRunning() || this.vpnChanging || vpnSdkPending()) { this.message = '请先关闭 VPN 再运行能力检查。'; return; }
     if (this.busy || !this.mounted || !this.appContext) { return; }
     this.busy = true;
     this.message = '';
@@ -360,6 +456,11 @@ struct Index {
       this.feature($r('app.media.shield'), '使用官方账号登录', '通过系统浏览器完成安全认证')
       this.feature($r('app.media.network'), '你的专属连接空间', '按设备标签、用户或名称筛选')
       this.notice()
+      if (this.vpnRunning()) {
+        Button(this.vpnNeedsCleanup ? '确认关闭 VPN' : '关闭 VPN')
+          .fontColor(BLUE).backgroundColor('#E2F0FF').width('100%').margin({ bottom: 12 })
+          .enabled(!this.busy).onClick(() => { this.setVpn(false); })
+      }
       Button() {
         Row({ space: 12 }) {
           if (this.busy) { LoadingProgress().width(20).height(20).color(Color.White) }
@@ -421,7 +522,8 @@ struct Index {
     }.width('100%').margin({ bottom: 20 })
     Row({ space: 7 }) {
       Text('').width(7).height(7).backgroundColor(BLUE).borderRadius(4)
-      Text('已登录 · VPN 尚未接入').fontSize(12).fontColor('#427297')
+      Text(this.vpnRunning() ? (this.vpn.connected ? '已登录 · VPN 已开启' : '已登录 · VPN 连接待确认') : '已登录 · VPN 未开启')
+        .fontSize(12).fontColor('#427297')
     }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor('#DEEEFB')
       .borderRadius(20).margin({ bottom: 18 }).alignSelf(ItemAlign.Start)
     Row({ space: 12 }) {
@@ -429,11 +531,15 @@ struct Index {
         .backgroundColor('#EDF2F6').borderRadius(24).justifyContent(FlexAlign.Center)
       Column({ space: 6 }) {
         Text('VPN').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
-        Text('尚未接入').fontSize(13).fontColor('#7B8C9D')
-        Text('系统 VPN 功能将在后续版本提供').fontSize(11).fontColor(MUTED)
+        Text(this.vpnChanging ? '正在切换…' : (this.vpnNeedsCleanup ? '关闭待确认' :
+          (this.vpn.connected ? '已开启' : (this.vpn.state === 'connecting' ? '正在重连…' : (this.vpn.ok ? '已关闭' : '连接异常')))))
+          .fontSize(13).fontColor(this.vpn.connected ? BLUE : MUTED)
+        Text(this.vpn.connected ? `发送 ${this.vpn.txPackets} 包 · 接收 ${this.vpn.rxPackets} 包` : '仅连接 Tailnet IPv4 · 保留普通上网')
+          .fontSize(11).fontColor(MUTED)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: false }).enabled(false)
-        .accessibilityText('系统 VPN 尚未接入，开关不可用')
+      Toggle({ type: ToggleType.Switch, isOn: this.vpnRunning() }).enabled(!this.busy && !this.vpnChanging)
+        .onChange((enabled: boolean) => { this.setVpn(enabled); })
+        .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })
     Text(`本机 IP：${this.status.tailscaleIPs?.join(' · ') || '暂无'}`)
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
@@ -517,8 +623,8 @@ struct Index {
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.page = 'diagnostics'; }).margin({ bottom: 24 })
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
-    Text('3.1.4 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
-    Text('此版本支持登录与设备发现，尚不提供全设备 VPN。')
+    Text('3.2.0 Alpha · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
+    Text('VPN Alpha：支持登录、在线设备和 Tailnet IPv4 互通。暂不支持 MagicDNS、IPv6、出口节点和子网路由。')
       .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 16 })
   }
 

@@ -8,3 +8,6 @@ export const onlinePeers: (filter: string) => Promise<string>;
 export const diagnostics: (dataDir: string) => Promise<string>;
 export const close: () => Promise<string>;
 export const inspectVpnDescriptor: (fd: number) => Promise<string>;
+export const startVpn: (dataDir: string, hostname: string, ipv4: string, fd: number) => Promise<string>;
+export const getVpnStatus: () => Promise<string>;
+export const networkChanged: () => Promise<string>;

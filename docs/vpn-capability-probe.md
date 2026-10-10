@@ -1,5 +1,12 @@
 # VPN capability probe — 3.1.4
 
+Phone confirmation received 2026-10-10: `ok:true`, `stage:complete`, acquisition,
+read-write access flags, process protection and all close/destroy checks passed.
+Metadata remained EACCES-restricted, with packet I/O explicitly unverified.
+The fixed artifact has since advanced to the [3.2.0 VPN Alpha](vpn-alpha.md).
+The historical probe package is retained separately; this diagnostic remains
+capability-only and is blocked while a real VPN session is active.
+
 This is the first platform milestone towards the confirmed functional VPN Alpha.
 It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding.
 

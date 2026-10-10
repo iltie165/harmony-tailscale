@@ -5,6 +5,9 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
 import { VpnProbeController, VpnProbePort, VpnProbeReport } from './VpnProbeModel';
 import { writeVpnProbe } from './VpnProbeStore';
+import { VpnSessionController, VpnSessionReport } from './VpnSessionModel';
+import { PlatformVpnSession } from './VpnSessionPlatform';
+import { publishSession } from './VpnSessionStore';
 
 class PlatformVpnProbePort implements VpnProbePort {
   private connection: vpnExtension.VpnConnection;
@@ -25,8 +28,13 @@ class PlatformVpnProbePort implements VpnProbePort {
 // Diagnostic only: no default route, Tailnet route, DNS override or core startup.
 export default class VpnProbeAbility extends VpnExtensionAbility {
   private controller: VpnProbeController = new VpnProbeController();
+  private session: VpnSessionController = new VpnSessionController();
 
   onCreate(want: Want): void {
+    if (want.parameters?.vpnMode === 'tailnet') {
+      this.runSession(want);
+      return;
+    }
     const requestId = want.parameters?.probeRequestId;
     if (typeof requestId !== 'string' || !/^[0-9-]{1,80}$/.test(requestId)) {
       hilog.error(0x5453, 'VpnCapabilityProbe', 'Missing diagnostic request identifier');
@@ -39,6 +47,27 @@ export default class VpnProbeAbility extends VpnExtensionAbility {
     // Do not race destroy against an outstanding create/protect/inspection.
     // The controller checks cancellation after each await and always cleans up.
     this.controller.cancel();
+    this.session.cancel();
+  }
+
+  private async runSession(want: Want): Promise<void> {
+    const id = want.parameters?.requestId;
+    const ipv4 = want.parameters?.ipv4;
+    const hostname = want.parameters?.hostname;
+    if (typeof id !== 'string' || !/^[0-9-]{1,80}$/.test(id) || typeof ipv4 !== 'string' || typeof hostname !== 'string') {
+      hilog.error(0x5453, 'TailscaleVPN', 'Invalid VPN startup parameters'); return;
+    }
+    try {
+      const port = new PlatformVpnSession(vpnExtension.createVpnConnection(this.context), this.context.filesDir, hostname, id);
+      await this.session.run(port, id, ipv4, (report: VpnSessionReport) => {
+        publishSession(this.context.filesDir, report);
+      });
+    } catch (error) {
+      const report = new VpnSessionReport(); report.requestId = id; report.stage = 'failed';
+      report.ok = false; report.state = 'error'; report.error = `VPN service: ${error}`;
+      try { publishSession(this.context.filesDir, report); } catch (_storeError) {}
+      hilog.error(0x5453, 'TailscaleVPN', '%{public}s', report.error);
+    }
   }
 
   private async runProbe(requestId: string): Promise<void> {
