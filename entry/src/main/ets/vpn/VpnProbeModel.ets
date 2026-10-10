@@ -8,6 +8,7 @@ export class VpnProbeReport {
   created: boolean = false;
   descriptorValid: boolean = false;
   readWriteDescriptor: boolean = false;
+  descriptorInspection: string = '';
   processProtected: boolean = false;
   descriptorClosed: boolean = false;
   destroyed: boolean = false;
@@ -38,6 +39,9 @@ export function readVpnProbe(raw: string, requestId: string): VpnProbeReport {
     typeof report.readWriteDescriptor !== 'boolean' || typeof report.processProtected !== 'boolean' ||
     typeof report.descriptorClosed !== 'boolean' || typeof report.destroyed !== 'boolean') {
     throw new Error('Invalid VPN capability report');
+  }
+  if (report.descriptorInspection !== undefined && typeof report.descriptorInspection !== 'string') {
+    throw new Error('Invalid descriptor inspection details');
   }
   if (report.ok && (report.stage !== 'complete' || !report.created || !report.descriptorValid ||
     !report.readWriteDescriptor || !report.processProtected || !report.descriptorClosed ||
@@ -79,13 +83,18 @@ export class VpnProbeController {
       this.checkCancelled();
       report.stage = 'inspectDescriptor';
       progress(report);
-      const result = JSON.parse(await port.inspect(fd)) as DescriptorResult;
-      if (!result || result.ok !== true || result.descriptorValid !== true ||
-        result.readWriteDescriptor !== true) {
+      report.descriptorInspection = await port.inspect(fd);
+      const result = JSON.parse(report.descriptorInspection) as DescriptorResult;
+      if (!result || typeof result.ok !== 'boolean' || typeof result.descriptorValid !== 'boolean' ||
+        typeof result.readWriteDescriptor !== 'boolean') {
+        throw new Error('Invalid native descriptor inspection result');
+      }
+      // Preserve successful measurements even when a later candidate check fails.
+      report.descriptorValid = result.descriptorValid;
+      report.readWriteDescriptor = result.readWriteDescriptor;
+      if (!result.ok || !result.descriptorValid || !result.readWriteDescriptor) {
         throw new Error(result?.error || 'VPN descriptor inspection failed');
       }
-      report.descriptorValid = true;
-      report.readWriteDescriptor = true;
       this.checkCancelled();
     } catch (error) {
       report.error = `${report.stage}: ${error}`;

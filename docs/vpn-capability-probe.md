@@ -1,4 +1,4 @@
-# VPN capability probe — 3.1.2
+# VPN capability probe — 3.1.3
 
 This is the first platform milestone towards the confirmed functional VPN Alpha.
 It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding.
@@ -24,6 +24,33 @@ It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding
   to stop its started extension and suppresses updates after unmount.
 - The report always contains `mode: capability-only` and
   `tunnelConnected: false`; login/device UI is not converted into connected VPN UI.
+
+## 3.1.3: preserve native descriptor failure evidence
+
+The user supplied a real 3.1.2 phone screenshot: `created`, `processProtected`,
+`descriptorClosed` and `destroyed` are true; `ok` is false, with
+`inspectDescriptor: Descriptor is not a readable/writable VPN candidate`.
+This proves acquisition/protection/cleanup API completion, not packet transport.
+The failure could be F_GETFL/fstat, access mode, or regular-file classification.
+The old model discarded successful measurements whenever `ok` was false, so
+its two false descriptor fields cannot distinguish these possibilities.
+
+3.1.3 preserves the raw native JSON as `descriptorInspection`, and copies valid
+boolean measurements even when candidate validation fails. Native inspection
+now reports flags, access mode, file mode/type, per-operation errno, the failed
+check stage and duplicate-close outcome. It retains the original candidate
+policy; regular files are not silently accepted and flags are not mutated.
+It still does not read/write packets, and does not claim that the platform
+descriptor issue is repaired until the actual device result is available.
+
+Server verification on 2026-10-10: `make check` passed 145 cases (70 Go leaf,
+5 C ABI, 7 real NAPI, 11 fault-mock NAPI, 52 UI/VPN), zero failures/skips;
+ARM64/ArkTS/HAP payload checks passed. Existing signing materials and the
+previous user-supplied password were used in ephemeral process environment;
+HAP, native code and permission signatures verified. Delivery filename remains
+`dist/hap/tailscale-probe-signed.hap`, version 3.1.3, SHA-256
+`da7dd5c9a0a7d083e89cc6a3108c49e2d726db782a2f48446a27be12f3bd5f86`.
+The previous signed 3.1.2 package is preserved separately.
 
 ## 3.1.2: stalled authorization/start/cleanup diagnosis
 
@@ -100,7 +127,7 @@ regular file; neither is misrepresented as a real HarmonyOS TUN.
 - The original verification above concerns 3.1.1. That package was subsequently
   signed/verified using the user's previously supplied password and delivered
   as `dist/hap/tailscale-probe-signed.hap`; no new password file was created.
-  The fixed download filename is retained for subsequent verified builds.
+The fixed download filename is retained for subsequent verified builds.
 
 ## Focused device acceptance
 

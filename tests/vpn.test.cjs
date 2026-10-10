@@ -34,7 +34,8 @@ function port(overrides = {}) {
 function success(id = '123-456') {
   return Object.assign(new model.VpnProbeReport(), {
     requestId: id, ok: true, stage: 'complete', created: true, descriptorValid: true,
-    readWriteDescriptor: true, processProtected: true, descriptorClosed: true, destroyed: true
+    readWriteDescriptor: true, processProtected: true, descriptorClosed: true, destroyed: true,
+    descriptorInspection: inspected
   });
 }
 test('capability probe preserves order, closes once, destroys once and never claims connectivity', async () => {
@@ -76,6 +77,32 @@ test('inspection failure and malformed responses do not escape cleanup', async (
     assert.equal(report.descriptorClosed, true);
     assert.equal(report.destroyed, true);
   }
+});
+
+test('a failed native candidate check retains valid FD measurements and all raw diagnostics', async () => {
+  const raw = JSON.stringify({ ok: false, descriptorValid: true, readWriteDescriptor: true,
+    regularFile: true, accessMode: 'read-write', checkStage: 'fileType', flags: 2,
+    error: 'regular-file VPN compatibility unverified' });
+  const p = port({ inspect: async () => raw });
+  const report = await new model.VpnProbeController().run(p.value, '1');
+  assert.equal(report.ok, false);
+  assert.equal(report.descriptorValid, true);
+  assert.equal(report.readWriteDescriptor, true);
+  assert.equal(report.descriptorInspection, raw);
+  assert.match(report.error, /regular-file VPN compatibility unverified/);
+  assert.equal(report.descriptorClosed, true);
+  assert.equal(report.destroyed, true);
+  assert.equal(model.readVpnProbe(JSON.stringify(report), '1').ok, false);
+});
+
+test('invalid native measurements cannot turn candidate failure into success', async () => {
+  const p = port({ inspect: async () => JSON.stringify({ ok: false, descriptorValid: 'yes', readWriteDescriptor: true }) });
+  const report = await new model.VpnProbeController().run(p.value, '1');
+  assert.equal(report.ok, false);
+  assert.equal(report.descriptorValid, false);
+  assert.match(report.error, /Invalid native descriptor inspection result/);
+  assert.equal(report.destroyed, true);
+  assert.throws(() => model.readVpnProbe(JSON.stringify({ ...success(), descriptorInspection: {} }), '123-456'));
 });
 test('close failure still attempts destroy; both failure reasons remain visible', async () => {
   const p = port({ close: () => { throw new Error('close failed'); }, destroy: async () => { throw new Error('destroy failed'); } });

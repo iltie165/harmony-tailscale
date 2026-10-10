@@ -36,6 +36,37 @@ test('VPN descriptor inspection validates arguments and preserves borrowed FD ow
   finally { fs.closeSync(regular); }
 });
 
+test('native descriptor failures expose access, type and errno without changing descriptor ownership', async () => {
+  const invalid = await parse(native.inspectVpnDescriptor(2147483647));
+  assert.equal(invalid.checkStage, 'duplicate');
+  assert.equal(invalid.errno, 9); // EBADF on the real Linux host.
+  for (const [file, mode, access, type, stage] of [
+    ['/dev/null', 'r', 'read-only', 'character', 'accessMode'],
+    ['/dev/null', 'w', 'write-only', 'character', 'accessMode'],
+    [__filename, 'r+', 'read-write', 'regular', 'fileType']
+  ]) {
+    const fd = fs.openSync(file, mode);
+    try {
+      const result = await parse(native.inspectVpnDescriptor(fd));
+      assert.equal(result.ok, false);
+      assert.equal(result.descriptorValid, true);
+      assert.equal(result.readWriteDescriptor, mode === 'r+');
+      assert.equal(result.accessMode, access);
+      assert.equal(result.fileType, type);
+      assert.equal(result.checkStage, stage);
+      assert.equal(result.flagsErrno, 0);
+      assert.equal(result.statErrno, 0);
+      assert.equal(result.duplicateClosed, true);
+      assert.equal(result.closeErrno, 0);
+      assert.equal(typeof result.flags, 'number');
+      assert.equal(result.fileMode, fs.fstatSync(fd).mode);
+      assert.equal(result.tunnelConnected, false);
+      assert.ok(result.error);
+      fs.fstatSync(fd); // Native inspection did not close the caller's FD.
+    } finally { fs.closeSync(fd); }
+  }
+});
+
 test('production NAPI module registers exactly the TypeScript contract', () => {
   const declarations = fs.readFileSync(path.join(__dirname, '../entry/src/main/cpp/types/libtailscale_napi/index.d.ts'), 'utf8');
   const expected = [...declarations.matchAll(/export const (\w+):/g)].map((m) => m[1]).sort();
