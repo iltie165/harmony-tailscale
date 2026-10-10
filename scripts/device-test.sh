@@ -25,11 +25,11 @@ docker run --rm --network host --privileged \
       echo "no HarmonyOS device detected by hdc" >&2
       exit 2
     fi
-    $hdc install /tmp/tailscale-probe-signed.hap
+    $hdc install -r /tmp/tailscale-probe-signed.hap
     $hdc shell aa force-stop com.ezoo.tailscaleprobe || true
     $hdc shell aa start -a EntryAbility -b com.ezoo.tailscaleprobe
-    echo "Use the app buttons in order: Query versions, Run diagnostics, Start tsnet."
-    echo "Streaming TailscaleProbe/TailscaleNAPI logs; press Ctrl-C after the result appears."
+    echo "Open Settings > Diagnostics and logs > Verify system VPN capability."
+    echo "Streaming UI, native and VPN extension logs; press Ctrl-C after the result appears."
     $hdc shell hilog -Q domainon
-    $hdc shell hilog | grep -E "TailscaleProbe|TailscaleNAPI|Go runtime|tsnet" | tee /logs/tailscale-probe-hilog.log
+    $hdc shell hilog | grep -E "TailscaleProbe|TailscaleNAPI|VpnCapabilityProbe|Go runtime|tsnet" | tee /logs/tailscale-probe-hilog.log
   '

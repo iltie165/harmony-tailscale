@@ -253,6 +253,8 @@ struct Index {
   private async runVpnProbe(): Promise<void> {
     if (this.busy || !this.mounted || !this.appContext) { return; }
     this.busy = true;
+    this.message = '';
+    this.output = '';
     this.progress = '等待系统 VPN 授权并验证能力…';
     const requestId = `${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
     const want: Want = {
@@ -261,14 +263,31 @@ struct Index {
     };
     const port = new PlatformVpnProbeRequest(want, this.appContext.filesDir);
     try {
-      const report = await requestVpnProbe(port, requestId, () => !this.mounted);
+      const report = await requestVpnProbe(port, requestId, () => !this.mounted,
+        (stage: string, raw: string) => {
+          if (!this.mounted) { return; }
+          switch (stage) {
+            case 'startVpnExtensionAbility': this.progress = '正在请求系统 VPN 授权并启动扩展（最多 60 秒）…'; break;
+            case 'awaitExtensionReport': this.progress = '启动调用已返回，等待 VPN 扩展报告（最多 30 秒）…'; break;
+            case 'starting': this.progress = 'VPN 扩展已运行，准备网卡检查…'; break;
+            case 'create': this.progress = 'VPN 扩展正在创建虚拟网卡…'; break;
+            case 'protectProcessNet': this.progress = '正在验证进程网络保护…'; break;
+            case 'inspectDescriptor': this.progress = '正在检查虚拟网卡描述符…'; break;
+            case 'cleanup': this.progress = '正在关闭网卡并清理 VPN 连接…'; break;
+            case 'stopVpnExtensionAbility': this.progress = '正在停止 VPN 扩展（最多 10 秒）…'; break;
+          }
+          if (raw) { this.output = safeOutput(raw); }
+        });
       if (this.mounted) {
         this.output = JSON.stringify(report);
         this.message = report.ok ? '系统 VPN 能力检查通过；尚未验证 Tailnet 数据通路。' : '系统 VPN 能力检查失败，详见结果。';
       }
     } catch (error) {
-      if (this.mounted) { this.output = `VPN 能力检查失败：${error}`; }
-    } finally { this.busy = false; }
+      if (this.mounted) {
+        this.message = '系统 VPN 能力检查未完成，详见下方错误与最后阶段；尚未确认清理。';
+        this.output += `\nVPN 能力检查失败：${error}`;
+      }
+    } finally { this.busy = false; this.progress = ''; }
   }
 
   private peerIcon(os: string): Resource {
@@ -496,7 +515,7 @@ struct Index {
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.page = 'diagnostics'; }).margin({ bottom: 24 })
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
-    Text('3.1.1 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
+    Text('3.1.2 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
     Text('此版本支持登录与设备发现，尚不提供全设备 VPN。')
       .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 16 })
   }

@@ -49,7 +49,10 @@ export default class VpnProbeAbility extends VpnExtensionAbility {
       writeVpnProbe(this.context.filesDir, pending);
       const connection = vpnExtension.createVpnConnection(this.context);
       const port = new PlatformVpnProbePort(connection);
-      const report = await this.controller.run(port, requestId);
+      const report = await this.controller.run(port, requestId, (current: VpnProbeReport) => {
+        writeVpnProbe(this.context.filesDir, current);
+        hilog.info(0x5453, 'VpnCapabilityProbe', 'Probe stage: %{public}s', current.stage);
+      });
       writeVpnProbe(this.context.filesDir, report);
       hilog.info(0x5453, 'VpnCapabilityProbe', 'Capability-only result: %{public}s', JSON.stringify(report));
     } catch (error) {

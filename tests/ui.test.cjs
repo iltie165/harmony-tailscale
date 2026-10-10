@@ -113,12 +113,35 @@ test('VPN diagnostic finishing after unmount stops the extension without changin
   ui.output = 'previous';
   const pending = ui.runVpnProbe();
   await ui.runVpnProbe(); // busy suppresses a second acquisition
+  const beforeUnmount = ui.output;
   ui.aboutToDisappear();
   release();
   await pending;
-  assert.equal(ui.output, 'previous');
+  assert.equal(ui.output, beforeUnmount);
   assert.deepEqual(probeCalls, ['stop']);
   assert.equal(ui.busy, false);
+});
+
+test('a pending SDK start times out with a visible stage and releases the UI', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let release;
+  const { ui, probeCalls } = harness({}, {
+    startVpnExtensionAbility: () => new Promise((resolve) => { release = resolve; })
+  });
+  ui.status = running;
+  const pending = ui.runVpnProbe();
+  assert.match(ui.progress, /60 秒/);
+  t.mock.timers.tick(60000);
+  await pending;
+  assert.equal(ui.busy, false);
+  assert.equal(ui.progress, '');
+  assert.equal(ui.status, running);
+  assert.match(ui.output, /timed out at startVpnExtensionAbility/);
+  assert.match(ui.message, /尚未确认清理/);
+  assert.deepEqual(probeCalls, []);
+  release();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+  assert.deepEqual(probeCalls, ['stop']);
 });
 
 test('dashboard requires a successful, Running, authenticated backend response', () => {

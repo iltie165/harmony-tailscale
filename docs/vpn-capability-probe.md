@@ -1,4 +1,4 @@
-# VPN capability probe — 3.1.1
+# VPN capability probe — 3.1.2
 
 This is the first platform milestone towards the confirmed functional VPN Alpha.
 It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding.
@@ -24,6 +24,41 @@ It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding
   to stop its started extension and suppresses updates after unmount.
 - The report always contains `mode: capability-only` and
   `tunnelConnected: false`; login/device UI is not converted into connected VPN UI.
+
+## 3.1.2: stalled authorization/start/cleanup diagnosis
+
+The user allowed the system VPN dialog on 3.1.1, but the UI remained waiting.
+The code inspection found that the old 60-attempt loop ran only after
+`startVpnExtensionAbility` returned; both start and stop could wait indefinitely.
+The supplied device log contained only TailscaleNAPI network-probe/receive-loop
+warnings, not extension startup evidence. The exact device stall is not yet
+identified, and this change does not claim to fix authorization or TUN transport.
+
+- Start/authorization is bounded to 60 seconds; report waiting to 30 seconds;
+  stop to 10 seconds. Cancellation is checked while an SDK Promise is pending.
+- UI distinguishes startup, missing extension report, create, process protection,
+  descriptor inspection and cleanup. The extension persists partial reports
+  before each asynchronous platform operation. Errors preserve the last report.
+- An unresolved SDK operation keeps a process-local lease. New probes are
+  rejected until it settles, preventing late cleanup from stopping a newer
+  probe. A late successful start gets exactly one cleanup attempt. Timeouts do
+  not imply that the OS operation has been cancelled or cleanup succeeded.
+- `device-test.sh` now includes the extension's `VpnCapabilityProbe` tag;
+  a TailscaleNAPI-only tail cannot diagnose extension loading/authorization.
+- Offline regressions cover genuinely unresolved start/stop/report Promises,
+  late resolution/rejection, unmount, stage snapshots and persistence failure
+  without sleeping for real time. Real device acceptance remains required.
+
+Verification of 3.1.2 on 2026-10-10: `make check` passed 141 cases (70 Go leaf,
+5 C ABI, 6 real-NAPI, 10 fault-mock NAPI, 50 UI/VPN), with no failures/skips.
+ARM64, ArkTS/API metadata and HAP native payload checks passed. The package was
+signed using existing materials and the previously user-supplied password in
+ephemeral process environment; HAP/permission/all-native-library code-sign
+verification passed. Delivery is `dist/hap/tailscale-probe-signed.hap`, version
+3.1.2, SHA-256
+`052cb8d1d5b3abd5544259459a805f7078b525d2433010b57805eab546964a9c`.
+The old signed 3.1.1 package is retained as a backup. This server verification
+does not prove that the phone now completes its extension lifecycle.
 
 ## What success does not prove
 
@@ -62,12 +97,14 @@ regular file; neither is misrepresented as a real HarmonyOS TUN.
 - Unsigned HAP: `dist/hap/tailscale-vpn-capability-3.1.1-unsigned.hap`.
 - SHA-256: `6146ab59e4b04b4e40a9f1f513467818f0f79305f5bd618e0cca9d8bbffec866`.
 - `hdc list targets` on this server returned `[Empty]`.
-- No signing password is available in the execution environment. No new signed
-  package was produced, and the prior signed artifact was not replaced.
+- The original verification above concerns 3.1.1. That package was subsequently
+  signed/verified using the user's previously supplied password and delivered
+  as `dist/hap/tailscale-probe-signed.hap`; no new password file was created.
+  The fixed download filename is retained for subsequent verified builds.
 
 ## Focused device acceptance
 
-1. Sign the exact 3.1.1 unsigned file using the existing device-valid profile and
+1. Sign the current unsigned file using the existing device-valid profile and
    a transient keystore password. Verify the signature; do not install an
    unsigned file or accidentally reuse the old generic signed 3.0.6 package.
    See `scripts/sign-hap.sh` and `device-test.md` for signing inputs.
@@ -86,6 +123,17 @@ regular file; neither is misrepresented as a real HarmonyOS TUN.
    lingering connections.
 7. Exercise denial/revocation and preserve the exact error plus cleanup evidence.
    A timeout means authorization/runtime/cleanup remains unverified, not success.
+
+For a stall, capture the last visible stage/report and both-process logs:
+
+```bash
+hdc shell hilog > vpn-probe-hilog.txt
+```
+
+Start capture before reproducing, press Ctrl-C after the error appears, and
+preserve `VpnCapabilityProbe`, `TailscaleProbe`, ability-load exceptions and VPN
+service entries. A `startVpnExtensionAbility` timeout is different from no
+report after startup or a stalled `create`/`protectProcessNet`/`cleanup` stage.
 
 Only after this platform evidence should the Tailscale packet adapter be claimed
 usable. The next milestone is genuine other-app TCP/UDP access to one Tailnet

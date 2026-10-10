@@ -145,7 +145,7 @@ test('authorization timeout is bounded and does not invent runtime or cleanup ev
   let waits = 0, stops = 0;
   const p = { start: async () => {}, stop: async () => { stops++; }, read: () => '', delay: async () => { waits++; } };
   await assert.rejects(client.requestVpnProbe(p, '1', () => false), /timed out.*cleanup remains unverified/);
-  assert.equal(waits, 60);
+  assert.equal(waits, 30);
   assert.equal(stops, 1);
 });
 test('failed start never stops an extension it did not start', async () => {
@@ -156,8 +156,111 @@ test('failed start never stops an extension it did not start', async () => {
 });
 test('request cancellation and stop errors remain explicit', async () => {
   let cancelled = false;
-  const p = { start: async () => { cancelled = true; }, stop: async () => { throw new Error('stop denied'); }, read: () => '' };
+  const p = { start: async () => {}, stop: async () => { throw new Error('stop denied'); },
+    read: () => '', delay: async () => { cancelled = true; } };
   await assert.rejects(client.requestVpnProbe(p, '1', () => cancelled), /cancelled.*stop denied/);
+});
+
+async function flushPromises() {
+  for (let i = 0; i < 16; i++) await Promise.resolve();
+}
+test('unresolved SDK start is bounded; late start is cleaned once before a new request may run', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let release, starts = 0, stops = 0;
+  const p = { start: () => { starts++; return new Promise((resolve) => { release = resolve; }); },
+    stop: async () => { stops++; }, read: () => '' };
+  const failed = assert.rejects(client.requestVpnProbe(p, '1', () => false), /timed out at startVpnExtensionAbility/);
+  t.mock.timers.tick(60000);
+  await failed;
+  assert.equal(stops, 0);
+  await assert.rejects(client.requestVpnProbe(p, '2', () => false), /Previous VPN SDK operation/);
+  assert.equal(starts, 1);
+  release();
+  await flushPromises();
+  assert.equal(stops, 1);
+  assert.equal((await client.requestVpnProbe({ start: async () => {}, stop: async () => {},
+    read: () => JSON.stringify(success('2')) }, '2', () => false)).ok, true);
+});
+test('a timed-out stop cannot later tear down a newer request', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let release, stops = 0;
+  const p = { start: async () => {}, stop: () => { stops++; return new Promise((resolve) => { release = resolve; }); },
+    read: () => JSON.stringify(success('1')) };
+  const failed = assert.rejects(client.requestVpnProbe(p, '1', () => false), /timed out at stopVpnExtensionAbility/);
+  await flushPromises();
+  t.mock.timers.tick(10000);
+  await failed;
+  await assert.rejects(client.requestVpnProbe(p, '2', () => false), /Previous VPN SDK operation/);
+  assert.equal(stops, 1);
+  release();
+  await flushPromises();
+  assert.equal((await client.requestVpnProbe({ start: async () => {}, stop: async () => {},
+    read: () => JSON.stringify(success('2')) }, '2', () => false)).ok, true);
+});
+test('a stalled report delay is bounded, retains the last stage and stops the started extension', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let stops = 0;
+  const stages = [];
+  const partial = Object.assign(new model.VpnProbeReport(), { requestId: '1', stage: 'create' });
+  const p = { start: async () => {}, stop: async () => { stops++; },
+    read: () => JSON.stringify(partial), delay: () => new Promise(() => {}) };
+  const failed = assert.rejects(client.requestVpnProbe(p, '1', () => false,
+    (stage) => { stages.push(stage); }), /timed out at create/);
+  await flushPromises();
+  t.mock.timers.tick(30000);
+  await failed;
+  assert.deepEqual(stages, ['startVpnExtensionAbility', 'awaitExtensionReport', 'create', 'stopVpnExtensionAbility']);
+  assert.equal(stops, 1);
+});
+test('unmount while SDK start is unresolved cancels promptly and later cleans only its acquired extension', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let cancelled = false, release, stops = 0;
+  const p = { start: () => new Promise((resolve) => { release = resolve; }), stop: async () => { stops++; } };
+  const failed = assert.rejects(client.requestVpnProbe(p, '1', () => cancelled), /cancelled at startVpnExtensionAbility/);
+  cancelled = true;
+  t.mock.timers.tick(250);
+  await failed;
+  assert.equal(stops, 0);
+  release();
+  await flushPromises();
+  assert.equal(stops, 1);
+});
+test('late SDK rejection releases the request lease without stopping an unowned extension', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let rejectStart, stops = 0;
+  const p = { start: () => new Promise((_resolve, reject) => { rejectStart = reject; }), stop: async () => { stops++; } };
+  const failed = assert.rejects(client.requestVpnProbe(p, '1', () => false), /timed out/);
+  t.mock.timers.tick(60000);
+  await failed;
+  rejectStart(new Error('late denial'));
+  await flushPromises();
+  assert.equal(stops, 0);
+  assert.equal((await client.requestVpnProbe({ start: async () => {}, stop: async () => {},
+    read: () => JSON.stringify(success('2')) }, '2', () => false)).ok, true);
+});
+test('controller publishes acquisition, protection, inspection and cleanup phases', async () => {
+  const phases = [];
+  const p = port();
+  const report = await new model.VpnProbeController().run(p.value, '1', (partial) => {
+    phases.push(JSON.parse(JSON.stringify(partial)));
+  });
+  assert.equal(report.ok, true);
+  assert.deepEqual(phases.map((x) => x.stage), ['create', 'protectProcessNet', 'inspectDescriptor', 'cleanup']);
+  assert.equal(phases[0].created, false);
+  assert.equal(phases[1].created, true);
+  assert.equal(phases[2].processProtected, true);
+  assert.equal(phases[3].descriptorClosed, false);
+});
+test('progress persistence failure cannot prevent cleanup of an acquired descriptor', async () => {
+  const p = port();
+  const report = await new model.VpnProbeController().run(p.value, '1', (partial) => {
+    if (partial.created) throw new Error('report write denied');
+  });
+  assert.equal(report.ok, false);
+  assert.match(report.error, /report write denied/);
+  assert.equal(report.descriptorClosed, true);
+  assert.equal(report.destroyed, true);
+  assert.deepEqual(p.calls, ['create', ['close', 17], 'destroy']);
 });
 test('extension executes actual SDK configuration with no Tailnet/default route or DNS override', async () => {
   const files = new Map(), writes = new Map(), closed = [], config = [];

@@ -57,7 +57,8 @@ export class VpnProbeController {
     if (this.cancelled) { throw new Error('VPN probe cancelled by extension lifecycle'); }
   }
 
-  async run(port: VpnProbePort, requestId: string): Promise<VpnProbeReport> {
+  async run(port: VpnProbePort, requestId: string,
+    progress: (report: VpnProbeReport) => void = () => {}): Promise<VpnProbeReport> {
     if (this.active) { throw new Error('VPN probe already running'); }
     this.active = true;
     const report = new VpnProbeReport();
@@ -66,15 +67,18 @@ export class VpnProbeController {
     try {
       this.checkCancelled();
       report.stage = 'create';
+      progress(report);
       fd = await port.create();
       report.created = true;
       if (!Number.isInteger(fd) || fd < 0) { throw new Error('VPN returned an invalid descriptor'); }
       this.checkCancelled();
       report.stage = 'protectProcessNet';
+      progress(report);
       await port.protectProcessNet();
       report.processProtected = true;
       this.checkCancelled();
       report.stage = 'inspectDescriptor';
+      progress(report);
       const result = JSON.parse(await port.inspect(fd)) as DescriptorResult;
       if (!result || result.ok !== true || result.descriptorValid !== true ||
         result.readWriteDescriptor !== true) {
@@ -87,6 +91,10 @@ export class VpnProbeController {
       report.error = `${report.stage}: ${error}`;
     } finally {
       if (report.created) {
+        report.stage = 'cleanup';
+        // Reporting failure must not prevent descriptor/connection cleanup.
+        try { progress(report); }
+        catch (error) { report.error += `; reportProgress: ${error}`; }
         // Our descriptor is closed before destroying the platform connection.
         // Native inspection only borrows it and closes its own duplicate.
         if (Number.isInteger(fd) && fd >= 0) {
