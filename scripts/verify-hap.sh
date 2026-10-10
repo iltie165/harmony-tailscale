@@ -27,6 +27,9 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     assert app['minAPIVersion'] % 1000 == 24, app
     assert app['targetAPIVersion'] % 1000 == 26, app
     assert app['bundleName'] == 'com.ezoo.tailscaleprobe', app
+    module = json.loads(archive.read('module.json'))['module']
+    assert any(ext['name'] == 'VpnProbeAbility' and ext['type'] == 'vpn' and
+               ext.get('exported') is False for ext in module['extensionAbilities']), module
     for name in archive.namelist():
         assert not name.endswith('.node') and 'libtailscale_host' not in name, name
 print('HAP metadata/API/host-artifact exclusion: PASS')
@@ -62,7 +65,7 @@ docker run --rm --pull never --network none \
     grep -q "napi_module_register" <<<"$napi_symbols"
     grep -q "napi_define_properties" <<<"$napi_symbols"
     napi_strings=$(strings -a /verify/libtailscale_napi.so)
-    for property in getVersion getStatus getLogs start login logout onlinePeers diagnostics close tailscale_napi; do
+    for property in getVersion getStatus getLogs start login logout onlinePeers diagnostics close inspectVpnDescriptor tailscale_napi; do
       grep -Fxq "$property" <<<"$napi_strings"
     done
     go_symbols=$(readelf -Ws /verify/libtailscale_ohos.so)

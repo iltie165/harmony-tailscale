@@ -7,3 +7,4 @@ export const logout: () => Promise<string>;
 export const onlinePeers: (filter: string) => Promise<string>;
 export const diagnostics: (dataDir: string) => Promise<string>;
 export const close: () => Promise<string>;
+export const inspectVpnDescriptor: (fd: number) => Promise<string>;

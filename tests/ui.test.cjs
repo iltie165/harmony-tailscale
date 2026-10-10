@@ -17,6 +17,10 @@ function compile(source, name, dependencies = {}) {
   return mod.exports;
 }
 const model = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ClientModel.ets'), 'utf8'), 'model.cjs');
+const vpnModel = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnProbeModel.ets'), 'utf8'), 'vpn-model.cjs');
+const vpnClient = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnProbeClient.ets'), 'utf8'), 'vpn-client.cjs', {
+  './VpnProbeModel': vpnModel
+});
 const loggedOut = { ok: true, backendState: 'NeedsLogin', loggedIn: false };
 const running = {
   ok: true, backendState: 'Running', loggedIn: true, tailscaleIPs: ['100.64.1.1'],
@@ -24,8 +28,27 @@ const running = {
   tailnet: { name: 'test.net', magicDNSSuffix: 'test.ts.net' }
 };
 const onlinePeer = { id: 'one', online: true, hostName: 'test-host', os: 'linux', tailscaleIPs: ['100.64.1.2'] };
-function harness(overrides = {}) {
+function harness(overrides = {}, vpnOverrides = {}) {
   const calls = [];
+  const probeCalls = [];
+  let probeId = '';
+  const vpnExtension = {
+    startVpnExtensionAbility: async (want) => { probeCalls.push('start'); probeId = want.parameters.probeRequestId; },
+    stopVpnExtensionAbility: async () => { probeCalls.push('stop'); },
+    ...vpnOverrides
+  };
+  const platform = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnProbePlatform.ets'), 'utf8'), 'vpn-platform.cjs', {
+    '@kit.AbilityKit': {}, '@kit.NetworkKit': { vpnExtension },
+    '@kit.CoreFileKit': { fileIo: {
+      accessSync: () => true,
+      readTextSync: () => JSON.stringify(Object.assign(new vpnModel.VpnProbeReport(), {
+        requestId: probeId, ok: true, stage: 'complete', created: true, descriptorValid: true,
+        readWriteDescriptor: true, processProtected: true, descriptorClosed: true, destroyed: true
+      }))
+    } },
+    './VpnProbeClient': vpnClient,
+    './VpnProbeStore': { vpnProbePath: (dir) => `${dir}/vpn-capability-probe.json` }
+  });
   const native = {
     start: async () => { calls.push('start'); return JSON.stringify({ ok: true, state: 'started' }); },
     getStatus: async () => { calls.push('status'); return JSON.stringify(running); },
@@ -47,17 +70,56 @@ function harness(overrides = {}) {
   const { Index } = compile(source, 'index.cjs', {
     '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {} } },
-    'libtailscale_napi.so': { default: native }, './ClientModel': model
+    'libtailscale_napi.so': { default: native }, './ClientModel': model,
+    '../vpn/VpnProbeClient': vpnClient,
+    '../vpn/VpnProbePlatform': platform
   });
   const ui = new Index();
   ui.mounted = true;
   ui.dataDir = '/private/tailscale';
   ui.appContext = {
+    filesDir: '/private',
     openLink: async (url) => { calls.push(['browser', url]); },
     startAbility: async () => { calls.push('fallback'); }
   };
-  return { ui, calls };
+  return { ui, calls, probeCalls };
 }
+
+test('VPN diagnostic UI preserves login and never treats capability success as tunnel connectivity', async () => {
+  const { ui, calls, probeCalls } = harness();
+  ui.status = running;
+  ui.peers = [onlinePeer];
+  await ui.runVpnProbe();
+  assert.equal(ui.status, running);
+  assert.equal(ui.peers[0], onlinePeer);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(probeCalls, ['start', 'stop']);
+  assert.equal(JSON.parse(ui.output).tunnelConnected, false);
+  assert.match(ui.message, /尚未验证 Tailnet/);
+  assert.equal(ui.busy, false);
+});
+test('VPN diagnostic denied authorization is explicit and retains authenticated UI', async () => {
+  const { ui, probeCalls } = harness({}, { startVpnExtensionAbility: async () => { throw new Error('authorization denied'); } });
+  ui.status = running;
+  await ui.runVpnProbe();
+  assert.match(ui.output, /authorization denied/);
+  assert.equal(ui.status, running);
+  assert.deepEqual(probeCalls, []);
+  assert.equal(ui.busy, false);
+});
+test('VPN diagnostic finishing after unmount stops the extension without changing UI', async () => {
+  let release;
+  const { ui, probeCalls } = harness({}, { startVpnExtensionAbility: () => new Promise((resolve) => { release = resolve; }) });
+  ui.output = 'previous';
+  const pending = ui.runVpnProbe();
+  await ui.runVpnProbe(); // busy suppresses a second acquisition
+  ui.aboutToDisappear();
+  release();
+  await pending;
+  assert.equal(ui.output, 'previous');
+  assert.deepEqual(probeCalls, ['stop']);
+  assert.equal(ui.busy, false);
+});
 
 test('dashboard requires a successful, Running, authenticated backend response', () => {
   assert.equal(model.isAuthenticated(running), true);

@@ -2,6 +2,8 @@ import { common, Want } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
+import { requestVpnProbe } from '../vpn/VpnProbeClient';
+import { PlatformVpnProbeRequest } from '../vpn/VpnProbePlatform';
 import { ControlResult, PeerInfo, readControl, readPeers, isAuthenticated,
   accountName, tailnetName, peerName, peerAddress, osLabel, safeOutput } from './ClientModel';
 
@@ -239,6 +241,36 @@ struct Index {
     finally { this.busy = false; }
   }
 
+  private confirmVpnProbe(): void {
+    this.getUIContext().showAlertDialog({
+      title: '验证系统 VPN 能力？',
+      message: '系统将请求 VPN 授权，可能替换其他正在使用的 VPN。此检查仅验证网卡和网络保护接口，不接管 Tailnet 或默认路由，完成后自动关闭。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '开始检查', action: () => { this.runVpnProbe(); } }
+    });
+  }
+
+  private async runVpnProbe(): Promise<void> {
+    if (this.busy || !this.mounted || !this.appContext) { return; }
+    this.busy = true;
+    this.progress = '等待系统 VPN 授权并验证能力…';
+    const requestId = `${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
+    const want: Want = {
+      bundleName: 'com.ezoo.tailscaleprobe', abilityName: 'VpnProbeAbility',
+      parameters: { probeRequestId: requestId }
+    };
+    const port = new PlatformVpnProbeRequest(want, this.appContext.filesDir);
+    try {
+      const report = await requestVpnProbe(port, requestId, () => !this.mounted);
+      if (this.mounted) {
+        this.output = JSON.stringify(report);
+        this.message = report.ok ? '系统 VPN 能力检查通过；尚未验证 Tailnet 数据通路。' : '系统 VPN 能力检查失败，详见结果。';
+      }
+    } catch (error) {
+      if (this.mounted) { this.output = `VPN 能力检查失败：${error}`; }
+    } finally { this.busy = false; }
+  }
+
   private peerIcon(os: string): Resource {
     switch (os.toLowerCase()) {
       case 'windows': return $r('app.media.device_windows');
@@ -464,7 +496,7 @@ struct Index {
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.page = 'diagnostics'; }).margin({ bottom: 24 })
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
-    Text('3.1.0 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
+    Text('3.1.1 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
     Text('此版本支持登录与设备发现，尚不提供全设备 VPN。')
       .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 16 })
   }
@@ -483,6 +515,9 @@ struct Index {
     this.diagnosticButton('平台与控制面检查', 'platform')
     this.diagnosticButton('读取 Go 日志', 'logs')
     this.diagnosticButton('测试系统浏览器', 'browser')
+    Button('验证系统 VPN 能力（不连接 Tailnet）').fontSize(13).fontColor(BLUE)
+      .backgroundColor('#E3EFFF').borderRadius(14).width('100%').height(44)
+      .enabled(!this.busy).onClick(() => { this.confirmVpnProbe(); })
     this.diagnosticButton('查询核心状态', 'status')
     this.diagnosticButton('启动核心', 'start')
     this.diagnosticButton('关闭核心（不会注销账号）', 'close')

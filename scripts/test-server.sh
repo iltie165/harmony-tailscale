@@ -30,7 +30,7 @@ docker run --rm --pull never --network none \
     HARMONY_HOST_LIBRARY=/workspace/dist/tests/libtailscale_host.so python3 tests/abi_test.py
     node_include=/opt/harmony/command-line-tools/tool/node/include/node
     for variant in real mock; do
-      sources=(entry/src/main/cpp/napi_init.cpp tests/host/sdk_shim.cpp)
+      sources=(entry/src/main/cpp/napi_init.cpp entry/src/main/cpp/vpn_descriptor.cpp tests/host/sdk_shim.cpp)
       link=()
       if [[ "$variant" == real ]]; then
         link=(-L/workspace/dist/tests -ltailscale_host -Wl,-rpath,\$ORIGIN)

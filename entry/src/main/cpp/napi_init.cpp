@@ -3,10 +3,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <climits>
 #include <sstream>
 #include <string>
 
 #include "libtailscale_ohos.h"
+#include "vpn_descriptor.h"
 
 namespace {
 
@@ -21,6 +24,7 @@ enum class AsyncOperation {
     OnlinePeers,
     Diagnostics,
     Close,
+    InspectVpnDescriptor,
 };
 
 struct AsyncContext {
@@ -33,6 +37,7 @@ struct AsyncContext {
     std::string filter;
     std::string result;
     std::string error;
+    int descriptor = -1;
 };
 
 std::string TakeGoString(char *value)
@@ -135,6 +140,7 @@ const char *OperationName(AsyncOperation operation)
         case AsyncOperation::OnlinePeers: return "onlinePeers";
         case AsyncOperation::Diagnostics: return "diagnostics";
         case AsyncOperation::Close: return "close";
+        case AsyncOperation::InspectVpnDescriptor: return "inspectVpnDescriptor";
     }
     return "unknown";
 }
@@ -188,11 +194,14 @@ void ExecuteAsync(napi_env, void *data)
         case AsyncOperation::Close:
             context->result = TakeGoString(tailscale_ohos_close());
             break;
+        case AsyncOperation::InspectVpnDescriptor:
+            context->result = InspectVpnDescriptor(context->descriptor);
+            break;
     }
     if (context->result.empty()) {
         context->error = "Go C ABI returned an empty result";
     }
-    ForwardGoLogs();
+    if (context->operation != AsyncOperation::InspectVpnDescriptor) { ForwardGoLogs(); }
 }
 
 void CompleteAsync(napi_env env, napi_status status, void *data)
@@ -329,6 +338,23 @@ napi_value Close(napi_env env, napi_callback_info)
     return QueueAsync(env, context, "tailscaleClose");
 }
 
+napi_value InspectDescriptor(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    double value = -1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc != 1 || napi_get_value_double(env, argv[0], &value) != napi_ok ||
+        !std::isfinite(value) || value < 0 || value > INT_MAX || std::floor(value) != value) {
+        napi_throw_type_error(env, nullptr, "inspectVpnDescriptor(fd) requires one nonnegative integer descriptor");
+        return nullptr;
+    }
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::InspectVpnDescriptor;
+    context->descriptor = static_cast<int>(value);
+    return QueueAsync(env, context, "vpnDescriptorInspection");
+}
+
 napi_value Init(napi_env env, napi_value exports)
 {
     napi_property_descriptor properties[] = {
@@ -341,6 +367,7 @@ napi_value Init(napi_env env, napi_value exports)
         {"onlinePeers", nullptr, OnlinePeers, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"diagnostics", nullptr, Diagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"close", nullptr, Close, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"inspectVpnDescriptor", nullptr, InspectDescriptor, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     return exports;

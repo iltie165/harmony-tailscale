@@ -32,6 +32,14 @@
         ]
       }
     ],
+    "extensionAbilities": [
+      {
+        "name": "VpnProbeAbility",
+        "srcEntry": "./ets/vpn/VpnProbeAbility.ets",
+        "type": "vpn",
+        "exported": false
+      }
+    ],
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"

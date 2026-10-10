@@ -9,7 +9,7 @@ set_target_properties(tailscale_ohos PROPERTIES
   IMPORTED_NO_SONAME TRUE
 )
 
-add_library(tailscale_napi SHARED napi_init.cpp)
+add_library(tailscale_napi SHARED napi_init.cpp vpn_descriptor.cpp)
 set_target_properties(tailscale_napi PROPERTIES
   SKIP_BUILD_RPATH TRUE
 )

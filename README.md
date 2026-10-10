@@ -3,6 +3,8 @@
 HarmonyOS ARM64 C ABI wrapper and Stage-model client shell for the official
 Tailscale Go core.
 
+This is an unofficial community project, not an official Tailscale or Huawei client.
+
 ## Engineering and tests
 
 ```bash
@@ -50,7 +52,7 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
-### 3.1.0 client UI
+### Client UI and 3.1.1 VPN capability probe
 
 The Chinese-language client UI separates the welcome/login screen from the
 signed-in device list. It displays the real account, Tailnet, local Tailscale
@@ -60,8 +62,12 @@ Existing sessions are restored on launch; bounded polling handles asynchronous
 backend startup. Settings contains diagnostics and selectable raw results.
 
 The VPN switch is deliberately disabled and labelled **尚未接入**: userspace
-`tsnet` authentication is not full-device VPN connectivity. This release does
-not add VPN Extension, TUN, routes or system DNS configuration.
+`tsnet` authentication is not full-device VPN connectivity. Version 3.1.1 adds
+an opt-in diagnostic VPN extension: create a temporary vNIC with no routes or
+DNS overrides, inspect its descriptor, request physical-network process
+protection, and close/destroy it. It does not forward any Tailnet packets.
+The diagnostic is under **设置 → 诊断与日志 → 验证系统 VPN 能力**.
+See [probe acceptance and verification](docs/vpn-capability-probe.md).
 
 Run production UI method/response-contract tests with mocked native APIs:
 
@@ -76,7 +82,7 @@ stale-device clearing, logout and navigation. They do **not** render ArkUI or
 replace device layout/browser/network acceptance. Hvigor separately compiles
 the complete ArkUI builders.
 
-The new artifact is `dist/hap/tailscale-ui-3.1.0-unsigned.hap`. Signing requires
+The current diagnostic artifact is `dist/hap/tailscale-vpn-capability-3.1.1-unsigned.hap`. Signing requires
 the transient P12 password, which has intentionally not been saved. The generic
 signed HAP may still be **3.0.6**, not 3.1.0.
 

@@ -1,0 +1,92 @@
+# VPN capability probe — 3.1.1
+
+This is the first platform milestone towards the confirmed functional VPN Alpha.
+It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding.
+
+## What is implemented
+
+- A non-exported `VpnProbeAbility`, separate from normal core startup/login.
+- An explicitly requested diagnostic with a warning that system authorization
+  can replace another active VPN. It never starts automatically.
+- Temporary vNIC address `192.0.2.1/32`, an empty route list, MTU 1280, no DNS
+  overrides and no IPv6 claim. The address is for this diagnostic only.
+- `protectProcessNet()` (SDK API 22, compatible with target minimum API 24).
+- Native descriptor inspection on an async NAPI worker: duplicate the borrowed
+  FD, inspect validity/access flags/type, close only that duplicate. No Go C ABI
+  change, packet payload capture, original FD mutation or forwarding.
+- Close the acquired original FD, then destroy the owned platform connection.
+  A rejected create does not destroy an unrelated connection. Failures stay
+  failures even if later cleanup succeeds.
+- Extension lifecycle cancellation checks after asynchronous acquisition and
+  inspection, avoiding an eager close while the worker may still borrow the FD.
+- Atomic private-file reports with a request identifier across the UI/extension
+  process boundary. The UI ignores stale reports, bounds its polling, attempts
+  to stop its started extension and suppresses updates after unmount.
+- The report always contains `mode: capability-only` and
+  `tunnelConnected: false`; login/device UI is not converted into connected VPN UI.
+
+## What success does not prove
+
+`readWriteDescriptor` records access flags, not an actual successful packet
+read/write. `processProtected` means the API completed, not observed control/
+DERP traffic exclusion. Actual TUN packet transport, physical-network routing,
+Tailnet reachability, direct/DERP behavior, network-change handling and sustained
+background service behavior remain future acceptance gates.
+
+## Server and target-build evidence
+
+The final `make check` completed successfully on 2026-10-10 using existing
+offline images/caches; no packages, signing configuration or base environment
+were changed. Source hygiene, Go race/vet/module/coverage gates also passed.
+
+| Lane | Passed | Failed/skipped |
+| --- | ---: | ---: |
+| Existing Go leaf cases | 70 | 0 |
+| Actual Linux C ABI (ctypes) | 5 | 0 |
+| Actual production NAPI + real Go core | 6 | 0 |
+| Actual production NAPI + fault-mock core | 10 | 0 |
+| Production UI methods and VPN models/adapters with mocked platform APIs | 42 | 0 |
+| **Total** | **133** | **0** |
+
+The 20 additional cases cover two native integration variants, 15 probe-model/
+extension/client cases and three UI integrations. They exercise authorization
+denial, invalid FD, protection/inspection/close/destroy failure, concurrent calls,
+cancellation at acquisition/worker boundaries, report validation, stale request
+isolation, bounded polling and UI unmount. Host FD tests use `/dev/null` and a
+regular file; neither is misrepresented as a real HarmonyOS TUN.
+
+- ARM64 Go/native linking and full ArkTS/Hvigor compilation: passed.
+- Packaged VPN extension declaration, native exports/links, API 24 minimum/API
+  26 target, ELF/TLS and host-artifact exclusion: passed.
+- Log: `dist/vpn-final-check.log`; other existing evidence: `dist/tests`.
+- Unsigned HAP: `dist/hap/tailscale-vpn-capability-3.1.1-unsigned.hap`.
+- SHA-256: `6146ab59e4b04b4e40a9f1f513467818f0f79305f5bd618e0cca9d8bbffec866`.
+- `hdc list targets` on this server returned `[Empty]`.
+- No signing password is available in the execution environment. No new signed
+  package was produced, and the prior signed artifact was not replaced.
+
+## Focused device acceptance
+
+1. Sign the exact 3.1.1 unsigned file using the existing device-valid profile and
+   a transient keystore password. Verify the signature; do not install an
+   unsigned file or accidentally reuse the old generic signed 3.0.6 package.
+   See `scripts/sign-hap.sh` and `device-test.md` for signing inputs.
+2. On the phone-connected machine, cover-install the new signed HAP to retain
+   the existing app-private login state. Launch `com.ezoo.tailscaleprobe`.
+3. Confirm existing login and peer-list behavior is intact and the main VPN
+   switch remains disabled.
+4. Open **设置 → 诊断与日志 → 验证系统 VPN 能力（不连接 Tailnet）**. Confirm
+   the diagnostic and accept the system VPN authorization when appropriate.
+5. Capture the real JSON/HiLog. A successful capability result must have
+   `ok`, `created`, `descriptorValid`, `readWriteDescriptor`, `processProtected`,
+   `descriptorClosed` and `destroyed` all true, `stage` complete and
+   `tunnelConnected` false. There are no fabricated device results in this report.
+6. Verify the temporary VPN is stopped, normal networking remains usable and
+   login/device state is retained. Repeat the probe to detect stale results or
+   lingering connections.
+7. Exercise denial/revocation and preserve the exact error plus cleanup evidence.
+   A timeout means authorization/runtime/cleanup remains unverified, not success.
+
+Only after this platform evidence should the Tailscale packet adapter be claimed
+usable. The next milestone is genuine other-app TCP/UDP access to one Tailnet
+peer, then direct/DERP and mobile lifecycle acceptance.

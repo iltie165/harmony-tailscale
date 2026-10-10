@@ -7,6 +7,35 @@ const native = require(process.env.HARMONY_HOST_NAPI);
 const real = process.env.HARMONY_NAPI_REAL === '1';
 const parse = async (value) => JSON.parse(await value);
 
+test('VPN descriptor inspection validates arguments and preserves borrowed FD ownership', async () => {
+  for (const args of [[], ['1'], [-1], [1.5], [Infinity], [NaN], [2147483648], [1, 2]]) {
+    assert.throws(() => native.inspectVpnDescriptor(...args), TypeError);
+  }
+  const invalid = await parse(native.inspectVpnDescriptor(2147483647));
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.descriptorValid, false);
+  const fd = fs.openSync('/dev/null', 'r+');
+  try {
+    const before = fs.readdirSync('/proc/self/fd').length;
+    for (let i = 0; i < 40; i++) {
+      const pending = native.inspectVpnDescriptor(fd);
+      assert.ok(pending instanceof Promise);
+      const result = await parse(pending);
+      assert.equal(result.ok, true);
+      assert.equal(result.readWriteDescriptor, true);
+      assert.equal(result.tunnelConnected, false);
+      assert.ok(fs.fstatSync(fd).isCharacterDevice());
+    }
+    assert.equal(fs.readdirSync('/proc/self/fd').length, before);
+  } finally { fs.closeSync(fd); }
+  const readOnly = fs.openSync('/dev/null', 'r');
+  try { assert.equal((await parse(native.inspectVpnDescriptor(readOnly))).ok, false); }
+  finally { fs.closeSync(readOnly); }
+  const regular = fs.openSync(__filename, 'r+');
+  try { assert.equal((await parse(native.inspectVpnDescriptor(regular))).ok, false); }
+  finally { fs.closeSync(regular); }
+});
+
 test('production NAPI module registers exactly the TypeScript contract', () => {
   const declarations = fs.readFileSync(path.join(__dirname, '../entry/src/main/cpp/types/libtailscale_napi/index.d.ts'), 'utf8');
   const expected = [...declarations.matchAll(/export const (\w+):/g)].map((m) => m[1]).sort();
