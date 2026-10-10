@@ -28,7 +28,7 @@ const running = {
   tailnet: { name: 'test.net', magicDNSSuffix: 'test.ts.net' }
 };
 const onlinePeer = { id: 'one', online: true, hostName: 'test-host', os: 'linux', tailscaleIPs: ['100.64.1.2'] };
-function harness(overrides = {}, vpnOverrides = {}) {
+function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}) {
   const calls = [];
   const probeCalls = [];
   let probeId = '';
@@ -43,7 +43,8 @@ function harness(overrides = {}, vpnOverrides = {}) {
       accessSync: () => true,
       readTextSync: () => JSON.stringify(Object.assign(new vpnModel.VpnProbeReport(), {
         requestId: probeId, ok: true, stage: 'complete', created: true, descriptorValid: true,
-        readWriteDescriptor: true, processProtected: true, descriptorClosed: true, destroyed: true
+        readWriteDescriptor: true, processProtected: true, descriptorClosed: true, destroyed: true,
+        ...probeReportOverrides
       }))
     } },
     './VpnProbeClient': vpnClient,
@@ -97,6 +98,14 @@ test('VPN diagnostic UI preserves login and never treats capability success as t
   assert.equal(JSON.parse(ui.output).tunnelConnected, false);
   assert.match(ui.message, /尚未验证 Tailnet/);
   assert.equal(ui.busy, false);
+});
+
+test('metadata-restricted UI success is labelled basic capability, not packet or Tailnet verification', async () => {
+  const { ui } = harness({}, {}, { warning: 'metadata access denied', packetIOVerified: false });
+  await ui.runVpnProbe();
+  assert.match(ui.message, /基础接口检查通过.*元数据查询受限.*尚未验证/);
+  assert.equal(JSON.parse(ui.output).packetIOVerified, false);
+  assert.equal(JSON.parse(ui.output).tunnelConnected, false);
 });
 test('VPN diagnostic denied authorization is explicit and retains authenticated UI', async () => {
   const { ui, probeCalls } = harness({}, { startVpnExtensionAbility: async () => { throw new Error('authorization denied'); } });

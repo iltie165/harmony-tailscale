@@ -104,6 +104,25 @@ test('invalid native measurements cannot turn candidate failure into success', a
   assert.equal(report.destroyed, true);
   assert.throws(() => model.readVpnProbe(JSON.stringify({ ...success(), descriptorInspection: {} }), '123-456'));
 });
+
+test('metadata-limited capability success preserves the warning and never claims packet transport', async () => {
+  const warning = 'Descriptor metadata query denied by sandbox; packet I/O remains unverified';
+  const raw = JSON.stringify({ ok: true, descriptorValid: true, readWriteDescriptor: true,
+    metadataAvailable: false, statErrno: 13, packetIOVerified: false, warning });
+  const p = port({ inspect: async () => raw });
+  const report = await new model.VpnProbeController().run(p.value, '1');
+  assert.equal(report.ok, true);
+  assert.equal(report.warning, warning);
+  assert.equal(report.packetIOVerified, false);
+  assert.equal(report.tunnelConnected, false);
+  assert.equal(model.readVpnProbe(JSON.stringify(report), '1').warning, warning);
+  assert.throws(() => model.readVpnProbe(JSON.stringify({ ...report, packetIOVerified: true }), '1'));
+  const falseClaim = await new model.VpnProbeController().run(port({
+    inspect: async () => JSON.stringify({ ok: true, descriptorValid: true, readWriteDescriptor: true, packetIOVerified: true })
+  }).value, '2');
+  assert.equal(falseClaim.ok, false);
+  assert.match(falseClaim.error, /Invalid native packet verification claim/);
+});
 test('close failure still attempts destroy; both failure reasons remain visible', async () => {
   const p = port({ close: () => { throw new Error('close failed'); }, destroy: async () => { throw new Error('destroy failed'); } });
   const report = await new model.VpnProbeController().run(p.value, '1');

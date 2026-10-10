@@ -65,6 +65,10 @@ docker run --rm --pull never --network none \
     grep -q "napi_module_register" <<<"$napi_symbols"
     grep -q "napi_define_properties" <<<"$napi_symbols"
     napi_strings=$(strings -a /verify/libtailscale_napi.so)
+    if grep -Fq HARMONY_TEST_DESCRIPTOR_FAULT <<<"$napi_strings"; then
+      echo "host descriptor fault-injection hook must not be packaged" >&2
+      exit 1
+    fi
     for property in getVersion getStatus getLogs start login logout onlinePeers diagnostics close inspectVpnDescriptor tailscale_napi; do
       grep -Fxq "$property" <<<"$napi_strings"
     done

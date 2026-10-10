@@ -280,7 +280,9 @@ struct Index {
         });
       if (this.mounted) {
         this.output = JSON.stringify(report);
-        this.message = report.ok ? '系统 VPN 能力检查通过；尚未验证 Tailnet 数据通路。' : '系统 VPN 能力检查失败，详见结果。';
+        this.message = report.ok ? (report.warning ?
+          '基础接口检查通过；元数据查询受限，数据包读写及 Tailnet 数据通路尚未验证。' :
+          '系统 VPN 能力检查通过；尚未验证 Tailnet 数据通路。') : '系统 VPN 能力检查失败，详见结果。';
       }
     } catch (error) {
       if (this.mounted) {
@@ -515,7 +517,7 @@ struct Index {
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.page = 'diagnostics'; }).margin({ bottom: 24 })
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
-    Text('3.1.3 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
+    Text('3.1.4 · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
     Text('此版本支持登录与设备发现，尚不提供全设备 VPN。')
       .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 16 })
   }

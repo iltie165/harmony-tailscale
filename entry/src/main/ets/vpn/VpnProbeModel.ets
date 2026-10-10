@@ -9,6 +9,8 @@ export class VpnProbeReport {
   descriptorValid: boolean = false;
   readWriteDescriptor: boolean = false;
   descriptorInspection: string = '';
+  warning: string = '';
+  packetIOVerified: boolean = false;
   processProtected: boolean = false;
   descriptorClosed: boolean = false;
   destroyed: boolean = false;
@@ -28,6 +30,8 @@ interface DescriptorResult {
   descriptorValid: boolean;
   readWriteDescriptor: boolean;
   error?: string;
+  warning?: string;
+  packetIOVerified?: boolean;
 }
 
 export function readVpnProbe(raw: string, requestId: string): VpnProbeReport {
@@ -42,6 +46,10 @@ export function readVpnProbe(raw: string, requestId: string): VpnProbeReport {
   }
   if (report.descriptorInspection !== undefined && typeof report.descriptorInspection !== 'string') {
     throw new Error('Invalid descriptor inspection details');
+  }
+  if ((report.warning !== undefined && typeof report.warning !== 'string') ||
+    (report.packetIOVerified !== undefined && report.packetIOVerified !== false)) {
+    throw new Error('Invalid VPN capability verification boundary');
   }
   if (report.ok && (report.stage !== 'complete' || !report.created || !report.descriptorValid ||
     !report.readWriteDescriptor || !report.processProtected || !report.descriptorClosed ||
@@ -92,6 +100,11 @@ export class VpnProbeController {
       // Preserve successful measurements even when a later candidate check fails.
       report.descriptorValid = result.descriptorValid;
       report.readWriteDescriptor = result.readWriteDescriptor;
+      if ((result.warning !== undefined && typeof result.warning !== 'string') ||
+        (result.packetIOVerified !== undefined && result.packetIOVerified !== false)) {
+        throw new Error('Invalid native packet verification claim');
+      }
+      report.warning = result.warning || '';
       if (!result.ok || !result.descriptorValid || !result.readWriteDescriptor) {
         throw new Error(result?.error || 'VPN descriptor inspection failed');
       }

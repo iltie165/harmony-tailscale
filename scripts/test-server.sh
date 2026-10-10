@@ -30,14 +30,14 @@ docker run --rm --pull never --network none \
     HARMONY_HOST_LIBRARY=/workspace/dist/tests/libtailscale_host.so python3 tests/abi_test.py
     node_include=/opt/harmony/command-line-tools/tool/node/include/node
     for variant in real mock; do
-      sources=(entry/src/main/cpp/napi_init.cpp entry/src/main/cpp/vpn_descriptor.cpp tests/host/sdk_shim.cpp)
+      sources=(entry/src/main/cpp/napi_init.cpp entry/src/main/cpp/vpn_descriptor.cpp tests/host/sdk_shim.cpp tests/host/descriptor_shim.cpp)
       link=()
       if [[ "$variant" == real ]]; then
         link=(-L/workspace/dist/tests -ltailscale_host -Wl,-rpath,\$ORIGIN)
       else
         sources+=(tests/host/mock_core.cpp)
       fi
-      g++ -std=c++20 -shared -fPIC -Wall -Wextra -Werror -Wno-deprecated-declarations \
+      g++ -std=c++20 -shared -fPIC -Wall -Wextra -Werror -Wno-deprecated-declarations -Wl,--wrap=fstat \
         -Itests/host/include -I"$node_include" -Idist/tests \
         "${sources[@]}" "${link[@]}" -o "dist/tests/tailscale-$variant.node"
       HARMONY_HOST_NAPI="/workspace/dist/tests/tailscale-$variant.node" \

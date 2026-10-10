@@ -1,4 +1,4 @@
-# VPN capability probe — 3.1.3
+# VPN capability probe — 3.1.4
 
 This is the first platform milestone towards the confirmed functional VPN Alpha.
 It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding.
@@ -24,6 +24,40 @@ It is **not a VPN Alpha release** and does not provide Tailnet packet forwarding
   to stop its started extension and suppresses updates after unmount.
 - The report always contains `mode: capability-only` and
   `tunnelConnected: false`; login/device UI is not converted into connected VPN UI.
+
+## 3.1.4: sandbox metadata access is not FD validity
+
+The real 3.1.3 screenshot identifies the exact failed check: duplication and
+F_GETFL succeeded, flags=133122, accessMode=read-write, flagsErrno=0;
+fstat failed with statErrno=13 (EACCES), fileType unknown. Acquisition, process
+protection, original/duplicate close and connection destruction all completed.
+The previous inspector incorrectly required metadata access to establish FD
+validity and read/write access mode.
+
+FD validity now uses successful duplication/F_GETFL. Only metadata EACCES/EPERM
+is tolerated for this SDK-acquired capability descriptor; the limitation remains
+visible in `warning`, `metadataAvailable:false`, `fileType:unknown`, and errno.
+Other stat errors, read-only/write-only FDs, known regular files and failed
+duplicate cleanup still fail. No access flags are changed, no permissions are
+requested or elevated, and no packets are read/written.
+
+The UI labels this outcome **basic interfaces passed, metadata access restricted**,
+not a verified packet device or working VPN. Both native and model reports
+retain `packetIOVerified:false` and `tunnelConnected:false`.
+Host regression link-wraps only the inspector's fstat boundary to inject
+EACCES/EPERM/EBADF/EIO while running production native code. The wrapper is not
+part of the target build; packaged binary checks reject its environment marker.
+These tests prove policy/ownership behavior, not mobile packet transport.
+
+Server verification on 2026-10-10: `make check` passed 149 cases (70 Go leaf,
+5 C ABI, 8 real NAPI, 12 fault-mock NAPI, 54 UI/VPN), with no failures/skips.
+ARM64/ArkTS/HAP and test-hook exclusion checks passed. Existing credentials
+were reused ephemerally for signing; HAP, all native-library code signatures
+and permission signature verified. Fixed download is
+`dist/hap/tailscale-probe-signed.hap`, version 3.1.4, SHA-256
+`b8c7879c8bb7088dff1243d91c7ba5eddf00209e2c532dff4ad0f0e4f00e04ec`.
+The old signed 3.1.3 package is preserved. Device confirmation of the revised
+basic-capability report and actual packet I/O still remain separate gates.
 
 ## 3.1.3: preserve native descriptor failure evidence
 

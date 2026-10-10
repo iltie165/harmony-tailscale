@@ -67,6 +67,42 @@ test('native descriptor failures expose access, type and errno without changing 
   }
 });
 
+test('sandbox metadata denial is an explicit limitation, not FD invalidity or packet verification', async () => {
+  const fd = fs.openSync('/dev/null', 'r+');
+  try {
+    for (const [fault, expectedErrno, tolerated] of [
+      ['EACCES', 13, true], ['EPERM', 1, true], ['EBADF', 9, false], ['EIO', 5, false]
+    ]) {
+      process.env.HARMONY_TEST_DESCRIPTOR_FAULT = fault;
+      let result;
+      try { result = await parse(native.inspectVpnDescriptor(fd)); }
+      finally { delete process.env.HARMONY_TEST_DESCRIPTOR_FAULT; }
+      assert.equal(result.ok, tolerated);
+      assert.equal(result.descriptorValid, true);
+      assert.equal(result.readWriteDescriptor, true);
+      assert.equal(result.metadataAvailable, false);
+      assert.equal(result.statErrno, expectedErrno);
+      assert.equal(result.fileType, 'unknown');
+      assert.equal(result.packetIOVerified, false);
+      assert.equal(result.tunnelConnected, false);
+      assert.equal(result.duplicateClosed, true);
+      assert.equal(result.checkStage, tolerated ? 'complete' : 'stat');
+      assert.equal(result.error === '', tolerated);
+      if (tolerated) assert.match(result.warning, /metadata.*denied.*unverified/);
+      else assert.equal(result.warning, '');
+      fs.fstatSync(fd); // The host wrapper cannot change ownership or Node's fstat.
+    }
+    const readOnly = fs.openSync('/dev/null', 'r');
+    try {
+      process.env.HARMONY_TEST_DESCRIPTOR_FAULT = 'EACCES';
+      const result = await parse(native.inspectVpnDescriptor(readOnly));
+      assert.equal(result.ok, false);
+      assert.equal(result.readWriteDescriptor, false);
+      assert.equal(result.checkStage, 'accessMode');
+    } finally { delete process.env.HARMONY_TEST_DESCRIPTOR_FAULT; fs.closeSync(readOnly); }
+  } finally { fs.closeSync(fd); }
+});
+
 test('production NAPI module registers exactly the TypeScript contract', () => {
   const declarations = fs.readFileSync(path.join(__dirname, '../entry/src/main/cpp/types/libtailscale_napi/index.d.ts'), 'utf8');
   const expected = [...declarations.matchAll(/export const (\w+):/g)].map((m) => m[1]).sort();
