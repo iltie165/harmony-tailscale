@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="250" viewBox="0 0 320 250">
+<defs>
+ <radialGradient id="halo"><stop stop-color="#C3E8FF" stop-opacity=".7"/><stop offset="1" stop-color="#EAF4FF" stop-opacity="0"/></radialGradient>
+ <linearGradient id="globe" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#D8F3FF"/><stop offset=".55" stop-color="#9DD6FF"/><stop offset="1" stop-color="#D4EAFF"/></linearGradient>
+ <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#C9E7FE"/></linearGradient>
+</defs>
+<circle cx="160" cy="125" r="120" fill="url(#halo)"/>
+<ellipse cx="164" cy="218" rx="78" ry="9" fill="#CEE6FA" opacity=".45"/>
+<circle cx="164" cy="117" r="73" fill="url(#globe)" stroke="#FFFFFF" stroke-width="1.5"/>
+<path d="M107 76c15-3 24 1 29 9l-8 15 12 18-7 25-10 5-13-24-15-7M171 49l24 15 6 19-13 12 10 18-13 8-14 27-21-8-6-22 10-15-11-16 6-17zM195 159l15 7 7 17-17 3-12-14" fill="#FFFFFF" opacity=".28"/>
+<ellipse cx="164" cy="117" rx="36" ry="73" fill="none" stroke="#FFFFFF" opacity=".45"/>
+<ellipse cx="164" cy="117" rx="73" ry="28" fill="none" stroke="#FFFFFF" opacity=".45"/>
+<ellipse cx="164" cy="117" rx="111" ry="54" transform="rotate(-28 164 117)" fill="none" stroke="#86CAFB" opacity=".5"/>
+<ellipse cx="164" cy="117" rx="108" ry="44" transform="rotate(30 164 117)" fill="none" stroke="#FFFFFF" stroke-width="2" opacity=".85"/>
+<circle cx="104" cy="41" r="6" fill="#23BBF5"/><circle cx="249" cy="67" r="4" fill="#168BFF"/><circle cx="220" cy="202" r="4" fill="#23BBF5"/>
+<g stroke="#B7D9F4"><rect x="44" y="134" width="61" height="51" rx="14" fill="url(#tile)"/><rect x="235" y="85" width="45" height="58" rx="12" fill="url(#tile)"/><rect x="165" y="173" width="51" height="48" rx="12" fill="url(#tile)"/></g>
+<g fill="none" stroke="#5686AC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+ <rect x="57" y="145" width="35" height="24" rx="2"/><path d="M54 174h41M75 169v5"/>
+ <rect x="249" y="96" width="17" height="34" rx="3"/><path d="M254 101h7M256 125h3"/>
+ <rect x="178" y="183" width="25" height="11" rx="2"/><rect x="178" y="198" width="25" height="11" rx="2"/><path d="M183 188h1M183 203h1M191 188h7M191 203h7"/>
+</g></svg>

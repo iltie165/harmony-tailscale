@@ -1,6 +1,7 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { emitter } from '@kit.BasicServicesKit';
 
 const DOMAIN: number = 0x5453;
 const TAG: string = 'TailscaleProbe';
@@ -22,5 +23,13 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, 'EntryAbility destroyed');
+  }
+
+  onForeground(): void {
+    emitter.emit('tailscale.foreground');
+  }
+
+  onBackground(): void {
+    emitter.emit('tailscale.background');
   }
 }

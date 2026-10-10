@@ -37,6 +37,36 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
+### 3.1.0 client UI
+
+The Chinese-language client UI separates the welcome/login screen from the
+signed-in device list. It displays the real account, Tailnet, local Tailscale
+IPs and visible online peers, with OS icons, name/tag/user filters and device
+details. Returning from browser authentication refreshes the session automatically.
+Existing sessions are restored on launch; bounded polling handles asynchronous
+backend startup. Settings contains diagnostics and selectable raw results.
+
+The VPN switch is deliberately disabled and labelled **尚未接入**: userspace
+`tsnet` authentication is not full-device VPN connectivity. This release does
+not add VPN Extension, TUN, routes or system DNS configuration.
+
+Run production UI method/response-contract tests with mocked native APIs:
+
+```bash
+./scripts/test-ui.sh
+```
+
+Tests run offline using the existing Node/TypeScript compiler in
+`harmonyos-dev:24.04`; no dependency installation is needed. They cover session
+restore, browser dispatch, foreground refresh, bounded polling, backend errors,
+stale-device clearing, logout and navigation. They do **not** render ArkUI or
+replace device layout/browser/network acceptance. Hvigor separately compiles
+the complete ArkUI builders.
+
+The new artifact is `dist/hap/tailscale-ui-3.1.0-unsigned.hap`. Signing requires
+the transient P12 password, which has intentionally not been saved. The generic
+signed HAP may still be **3.0.6**, not 3.1.0.
+
 The `entry` module implements this call chain:
 
 ```text

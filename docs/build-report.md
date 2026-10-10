@@ -150,5 +150,25 @@ asserts that the resulting `netns.Listener` has no socket-control hook.
 
 Go unit tests, OpenHarmony ARM64 build, Native C++ link, ArkTS compilation, HAP
 payload verification, HAP signing, and native code-sign verification pass. The
-Phase 3 login and online-peer behavior still require real-device validation;
-build/signature success is not substituted for that evidence.
+user subsequently confirmed successful official authentication and online peers
+on the real HarmonyOS phone with 3.0.6. This does not establish system VPN/TUN
+functionality.
+
+### UI 3.1.0 (2026-10-10)
+
+- Reference-inspired pale-blue welcome screen, vector globe/device illustration,
+  account/Tailnet header, white rounded online-device cards and OS icons.
+- Device detail page, name/tag/user filtering, loading/error/empty states, logout
+  confirmation and a separate settings/diagnostics entry.
+- Foreground refresh after browser authentication, restored session on launch,
+  bounded startup/login polling; native networking and C ABI remain unchanged.
+- No fake connected state: system VPN is disabled and labelled 尚未接入.
+- 16 offline server tests execute the production UI methods against mocked
+  NAPI/browser dependencies and exercise response contracts and error/lifecycle
+  behavior. ArkUI builders are separately validated by Hvigor compilation.
+- OpenHarmony ARM64, Native C++ link, ELF/TLS checks, API 24-compatible ArkTS
+  compilation and packaged NAPI/Go payload verification passed.
+- Unsigned HAP SHA-256:
+  `ed91277b70c5630a501cd0434b516a878a382592ae3df7db4eb4824a4021f23f`.
+- Signing is blocked only by the missing transient P12 password. No new signed
+  HAP or device screenshot/visual acceptance is claimed for 3.1.0.
