@@ -6,6 +6,7 @@ import { stopRequested } from './VpnSessionStore';
 import { boundedVpn } from './VpnSessionClient';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { configurePlatformInfo } from '../pages/PlatformInfo';
 
 export class PlatformVpnSession implements VpnSessionPort {
   private connection: vpnExtension.VpnConnection;
@@ -28,6 +29,7 @@ export class PlatformVpnSession implements VpnSessionPort {
   }
   protect(): Promise<void> { return this.connection.protectProcessNet(); }
   async attach(fd: number, ipv4: string): Promise<string> {
+    await configurePlatformInfo();
     const raw: string = await tailscale.startVpn(`${this.dir}/tailscale`, this.hostname, ipv4, fd);
     const result = JSON.parse(raw) as VpnCoreResult;
     if (result.ok) {

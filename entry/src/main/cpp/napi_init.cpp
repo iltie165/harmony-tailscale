@@ -17,6 +17,7 @@ constexpr unsigned int TS_LOG_DOMAIN = 0x5453;
 constexpr const char *TS_LOG_TAG = "TailscaleNAPI";
 
 enum class AsyncOperation {
+    ConfigurePlatform,
     Start,
     StartService,
     ConnectService,
@@ -141,6 +142,7 @@ void ForwardGoLogs()
 const char *OperationName(AsyncOperation operation)
 {
     switch (operation) {
+        case AsyncOperation::ConfigurePlatform: return "configurePlatform";
         case AsyncOperation::Start: return "start";
         case AsyncOperation::StartService: return "startService";
         case AsyncOperation::ConnectService: return "connectService";
@@ -184,6 +186,10 @@ void ExecuteAsync(napi_env, void *data)
 {
     auto *context = static_cast<AsyncContext *>(data);
     switch (context->operation) {
+        case AsyncOperation::ConfigurePlatform:
+            context->result = TakeGoString(tailscale_ohos_configure_platform(
+                const_cast<char *>(context->filter.c_str())));
+            break;
         case AsyncOperation::Start:
             context->result = TakeGoString(tailscale_ohos_start(
                 const_cast<char *>(context->dataDir.c_str()),
@@ -468,10 +474,26 @@ napi_value InspectDescriptor(napi_env env, napi_callback_info info)
     return QueueAsync(env, context, "vpnDescriptorInspection");
 }
 
+napi_value ConfigurePlatform(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::ConfigurePlatform;
+    if (argc != 1 || !ReadString(env, argv[0], context->filter)) {
+        delete context;
+        napi_throw_type_error(env, nullptr, "configurePlatform(metadata) requires one string without NUL");
+        return nullptr;
+    }
+    return QueueAsync(env, context, "tailscaleConfigurePlatform");
+}
+
 napi_value Init(napi_env env, napi_value exports)
 {
     napi_property_descriptor properties[] = {
         {"getVersion", nullptr, GetVersion, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"configurePlatform", nullptr, ConfigurePlatform, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getStatus", nullptr, GetStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getLogs", nullptr, GetLogs, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"start", nullptr, Start, nullptr, nullptr, nullptr, napi_default, nullptr},

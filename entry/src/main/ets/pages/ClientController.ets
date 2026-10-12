@@ -9,6 +9,7 @@ import { vpnSdkPending } from '../vpn/VpnSessionClient';
 import { ControlResult, PeerInfo, readControl, readPeers, isAuthenticated,
   accountName, tailnetName, peerName, peerAddress, osLabel, safeOutput } from './ClientModel';
 import { SessionPreview, SessionPreviewStore, previewOf } from './SessionPreview';
+import { readPlatformInfo } from './PlatformInfo';
 
 import { fileIo } from '@kit.CoreFileKit';
 import { NetworkServiceClient, NetworkServiceError } from '../vpn/NetworkServiceClient';
@@ -31,6 +32,9 @@ export class ClientView {
   lastUpdated: string = '';
   awaitingLogin: boolean = false;
   restoringSession: boolean = true;
+  startupPhase: string = 'checking';
+  startupError: string = '';
+  startupBlocking: boolean = true;
   previewAccount: ControlResult = {};
   peersStale: boolean = true;
   corePaused: boolean = false;
@@ -57,6 +61,10 @@ export class ClientController {
   public lastUpdated: string = '';
   public awaitingLogin: boolean = false;
   public restoringSession: boolean = true;
+  public startupPhase: string = 'checking';
+  public startupError: string = '';
+  private startupDismissed: boolean = false;
+  private startupTimer: number = -1;
   public previewAccount: ControlResult = {};
   public peersStale: boolean = true;
   public corePaused: boolean = false;
@@ -112,6 +120,7 @@ export class ClientController {
 
   aboutToDisappear(): void {
     this.mounted = false;
+    this.stopStartupTimer();
     this.stopPolling();
     if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
     emitter.off('tailscale.foreground', this.foregroundCallback);
@@ -131,6 +140,37 @@ export class ClientController {
   }
 
   hasAccount(): boolean { return isAuthenticated(this.status) || this.previewAccount.self !== undefined; }
+  startupBlocking(): boolean { return !this.startupDismissed && this.startupPhase !== 'ready'; }
+  vpnToggleEnabled(): boolean {
+    return !this.busy && !this.vpnChanging && (this.vpnWanted() || this.vpnRunning() ||
+      (!this.corePaused && this.startupPhase === 'ready' && isAuthenticated(this.status) &&
+        this.status.backendState === 'Running' && this.status.tailscaleIPs?.some(tailnetIPv4) === true));
+  }
+  private stopStartupTimer(): void {
+    if (this.startupTimer !== -1) { clearTimeout(this.startupTimer); this.startupTimer = -1; }
+  }
+  private beginStartup(): void {
+    this.stopStartupTimer();
+    this.startupPhase = 'checking'; this.startupError = ''; this.startupDismissed = false;
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = -1;
+      if (this.mounted && this.startupPhase === 'checking') {
+        this.failStartup('连接准备超过 30 秒，请检查网络。账号记录已保留。'); this.notify();
+      }
+    }, 30000);
+  }
+  private failStartup(message: string): void {
+    if (this.startupPhase === 'ready') { return; }
+    this.stopStartupTimer(); this.startupPhase = 'failed'; this.startupError = message;
+  }
+  private completeStartup(): void {
+    this.stopStartupTimer(); this.startupPhase = 'ready'; this.startupError = '';
+  }
+  dismissStartup(): void { this.startupDismissed = true; this.notify(); }
+  async retryStartup(): Promise<void> {
+    if (this.busy) { return; }
+    await this.restoreSession();
+  }
   displayAccount(): ControlResult { return this.previewAccount.self ? this.previewAccount : this.status; }
   private savePreview(): void {
     const snapshot = this.hasAccount() ? previewOf(this.displayAccount(),
@@ -173,7 +213,9 @@ export class ClientController {
     if (!this.mounted) { return; }
     if (JSON.stringify(this.status) !== JSON.stringify(result)) { this.status = result; }
     if (result.backendState === 'NeedsLogin' || result.backendState === 'NeedsMachineAuth') {
+      this.completeStartup();
       this.clearAccountPreview();
+      if (result.backendState === 'NeedsMachineAuth') { this.message = '设备需要管理员批准，请在 Tailscale 管理后台完成授权。'; }
       if (this.page === 'detail') { this.page = 'main'; }
     } else if (isAuthenticated(result)) {
       const previous = this.previewAccount.self;
@@ -193,6 +235,7 @@ export class ClientController {
       this.savePreview();
     }
     if (isAuthenticated(result) && result.backendState === 'Running') {
+      if (result.tailscaleIPs?.some(tailnetIPv4)) { this.completeStartup(); }
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
       this.stopPolling();
@@ -267,6 +310,9 @@ export class ClientController {
 
 
   async setVpn(enabled: boolean): Promise<void> {
+    if (enabled && this.startupPhase !== 'ready') {
+      this.message = '连接尚未准备完成，请等待或重试连接。'; this.notify(); return;
+    }
     if (this.busy || this.vpnChanging || (enabled === this.vpnWanted() && !this.vpnNeedsCleanup &&
       (enabled ? this.vpn.connected : !this.vpnRunning()))) { return; }
     this.busy = true; this.vpnChanging = true; this.message = ''; this.notify();
@@ -309,7 +355,8 @@ export class ClientController {
   }
 
   async restoreSession(): Promise<void> {
-    if (this.corePaused) { this.restoringSession = false; this.notify(); return; }
+    if (this.corePaused) { this.restoringSession = false; this.completeStartup(); this.notify(); return; }
+    this.beginStartup();
     this.restoringSession = true;
     if (this.appContext) {
       this.previewStore = new SessionPreviewStore(this.appContext.filesDir);
@@ -326,6 +373,7 @@ export class ClientController {
     let savedState = false;
     try { savedState = fileIo.accessSync(`${this.dataDir}/tailscaled.state`); } catch (_error) {}
     if (!this.hasAccount() && !savedState && !this.networkPort?.read()?.serviceReady) {
+      this.completeStartup();
       this.restoringSession = false; this.busy = false; this.restoreDeadline = 0; this.notify(); return;
     }
     this.busy = true;
@@ -335,11 +383,13 @@ export class ClientController {
       await this.ensureService();
       if (!this.mounted) { return; }
       await this.loadData();
+      if (this.mounted && this.startupPhase === 'checking') { this.progress = '正在恢复账号连接并准备 VPN…'; }
     } catch (error) {
       if (this.mounted) {
         this.restoreDeadline = 0;
         this.peersStale = true;
         this.message = `恢复状态失败：${error}`;
+        this.failStartup(this.message);
       }
     } finally {
       this.busy = false;
@@ -360,6 +410,7 @@ export class ClientController {
     catch (error) {
       if (this.mounted) {
         this.message = `刷新失败：${error}`;
+        this.failStartup(this.message);
         this.peersStale = true;
       }
     } finally {
@@ -449,7 +500,7 @@ export class ClientController {
       if (this.vpnRunning() && (operation === 'close' || operation === 'start')) {
         throw new Error('VPN 运行期间请使用主界面开关管理核心');
       }
-      if (operation === 'versions') { this.output = safeOutput(tailscale.getVersion()); }
+      if (operation === 'versions') { this.output = `${safeOutput(tailscale.getVersion())}\n系统信息：\n${JSON.stringify(readPlatformInfo())}`; }
       else if (operation === 'logs') { this.output = safeOutput(tailscale.getLogs()); }
       else if (operation === 'browser') {
         await this.openSystemBrowser('https://login.tailscale.com/');
@@ -613,6 +664,8 @@ export class ClientController {
     view.lastUpdated = this.lastUpdated;
     view.awaitingLogin = this.awaitingLogin;
     view.restoringSession = this.restoringSession;
+    view.startupPhase = this.startupPhase; view.startupError = this.startupError;
+    view.startupBlocking = this.startupBlocking();
     view.previewAccount = this.previewAccount;
     view.peersStale = this.peersStale;
     view.corePaused = this.corePaused;
@@ -637,6 +690,8 @@ export class ClientController {
       previous.lastUpdated === view.lastUpdated &&
       previous.awaitingLogin === view.awaitingLogin &&
       previous.restoringSession === view.restoringSession &&
+      previous.startupPhase === view.startupPhase && previous.startupError === view.startupError &&
+      previous.startupBlocking === view.startupBlocking &&
       previous.previewAccount === view.previewAccount &&
       previous.peersStale === view.peersStale &&
       previous.corePaused === view.corePaused &&

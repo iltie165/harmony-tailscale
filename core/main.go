@@ -82,6 +82,12 @@ func tailscale_ohos_start(cDataDir, cHostname *C.char) (output *C.char) {
 	return cJSON(startCore(C.GoString(cDataDir), C.GoString(cHostname)))
 }
 
+//export tailscale_ohos_configure_platform
+func tailscale_ohos_configure_platform(cMetadata *C.char) (output *C.char) {
+	defer panicResult("configurePlatform", &output)
+	return cJSON(configurePlatform(C.GoString(cMetadata)))
+}
+
 //export tailscale_ohos_start_vpn
 func tailscale_ohos_start_vpn(cDataDir, cHostname, cAddress *C.char, fd C.int) (output *C.char) {
 	defer panicResult("startVpn", &output)

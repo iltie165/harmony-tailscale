@@ -1,6 +1,7 @@
 export const getVersion: () => string;
 export const getStatus: () => Promise<string>;
 export const getLogs: () => string;
+export const configurePlatform: (metadata: string) => Promise<string>;
 export const start: (dataDir: string, hostname: string) => Promise<string>;
 export const startService: (dataDir: string, hostname: string) => Promise<string>;
 export const detachVpn: () => Promise<string>;

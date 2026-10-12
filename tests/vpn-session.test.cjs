@@ -121,6 +121,7 @@ test('platform session installs only IPv4 Tailnet route, adapts callback monitor
     '@kit.BasicServicesKit': {}, '@kit.PerformanceAnalysisKit': { hilog: { warn() {} } },
     './VpnSessionModel': model, './VpnSessionStore': { stopRequested: () => false },
     './VpnSessionClient': client,
+    '../pages/PlatformInfo': { configurePlatformInfo: async () => {} },
     'libtailscale_napi.so': { default: {
       startVpn: async (...args) => { calls.push(['attach', ...args]); return '{"ok":true}'; },
       networkChanged: async () => { calls.push('networkChanged'); return '{"ok":true}'; },

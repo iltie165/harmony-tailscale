@@ -138,6 +138,11 @@ func TestSwitchTunRejectsDoubleAttachAndSurvivesDescriptorFailure(t *testing.T) 
 // account or a fake authentication field. Production attach checks remain on.
 func TestRealServiceCoreIsReusedAcrossRepeatedVpnAttachments(t *testing.T) {
 	setupBackend(t, &fakeBackend{})
+	previousPlatform := reportedPlatform.Load()
+	t.Cleanup(func() { reportedPlatform.Store(previousPlatform) })
+	if r := configurePlatform(`{"os":"openharmony","osVersion":"6.1.1.120","deviceModel":"test-phone"}`); !r.OK {
+		t.Fatal(r)
+	}
 	relayCore := derp.NewServer(key.NewNode(), t.Logf)
 	defer relayCore.Close()
 	relay := httptest.NewTLSServer(derphttp.Handler(relayCore))
@@ -193,6 +198,11 @@ func TestRealServiceCoreIsReusedAcrossRepeatedVpnAttachments(t *testing.T) {
 	if status.BackendState != "Running" {
 		t.Log(recentLogLines(40))
 		t.Fatal("local registration did not become Running", status.BackendState)
+	}
+	nodes := control.AllNodes()
+	if len(nodes) != 1 || nodes[0].Hostinfo.OS() != "openharmony" ||
+		nodes[0].Hostinfo.OSVersion() != "6.1.1.120" || nodes[0].Hostinfo.DeviceModel() != "test-phone" {
+		t.Fatal("real encrypted control registration lost platform metadata", nodes)
 	}
 	address := ""
 	for _, ip := range status.TailscaleIPs {

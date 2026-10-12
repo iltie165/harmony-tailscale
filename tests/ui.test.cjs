@@ -175,6 +175,7 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
     'libtailscale_napi.so': { default: native }, './ClientModel': model,
     './SessionPreview': preview,
+    './PlatformInfo': { readPlatformInfo: () => ({os:'openharmony',osVersion:'test',deviceModel:'test-phone'}) },
     '../vpn/VpnProbeClient': vpnClient, '../vpn/VpnProbePlatform': platform,
     '../vpn/VpnSessionModel': sessionModel, '../vpn/VpnSessionClient': sessionClient,
     '../vpn/NetworkServiceClient': serviceClient,
@@ -183,6 +184,9 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     '../vpn/VpnRecoveryModel':recovery, '../vpn/VpnRecoveryPlatform':recoveryPlatform
   });
   const ui = new Index();
+  // Existing interaction cases start after the startup gate. Startup cases
+  // explicitly invoke restoreSession(), which resets the gate.
+  ui.startupPhase = 'ready';
   activeViews.add(ui);
   ui.mounted = true;
   ui.dataDir = '/private/tailscale';
@@ -206,6 +210,51 @@ test('main VPN toggle commands a stable service and OFF retains core/account wit
   assert.equal(ui.status.loggedIn, true); assert.equal(ui.peers.length, 1);
   assert.ok(calls.includes('detachInterface')); assert.ok(calls.includes('destroyInterface')); assert.ok(!calls.includes('serviceStop')); assert.ok(!calls.includes('close'));
   assert.match(ui.message, /登录已保留/); ui.aboutToDisappear();
+});
+
+test('startup gate blocks ON until live account, Running and IPv4 are ready; peers do not gate VPN', async () => {
+  let state={...running,backendState:'Starting'};
+  const {ui,calls}=harness({getStatus:async()=>JSON.stringify(state),onlinePeers:async()=>{throw new Error('peer sync unavailable');}});
+  await ui.restoreSession();
+  assert.equal(ui.startupBlocking(),true);await ui.setVpn(true);assert.equal(ui.vpnWanted(),false);
+  assert.ok(!calls.some(c=>Array.isArray(c)&&c[0]==='serviceCommand'&&c[1]));
+  state={...running,tailscaleIPs:['fd7a:115c:a1e0::1']};await ui.refreshData(true);
+  assert.equal(ui.vpnToggleEnabled(),false);assert.equal(ui.startupBlocking(),true);
+  state=running;await ui.refreshData(true);
+  assert.equal(ui.startupBlocking(),false);assert.equal(ui.vpnToggleEnabled(),true);
+  assert.match(ui.message,/peer sync unavailable/);assert.ok(!calls.includes('login'));
+});
+test('startup timeout offers retry/diagnostics and a late live result still releases the gate', async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+  let ready=false;
+  const {ui}=harness({getStatus:async()=>JSON.stringify({...running,backendState:ready?'Running':'Starting'})});
+  await ui.restoreSession();t.mock.timers.tick(30001);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.startupPhase,'failed');assert.match(ui.startupError,/30 秒/);assert.equal(ui.startupBlocking(),true);
+  ui.dismissStartup();assert.equal(ui.startupBlocking(),false);assert.equal(ui.vpnToggleEnabled(),false);
+  await ui.retryStartup();assert.equal(ui.startupPhase,'checking');assert.equal(ui.startupBlocking(),true);
+  ready=true;await ui.refreshData(true);assert.equal(ui.startupPhase,'ready');assert.equal(ui.startupError,'');
+});
+test('expired credentials release startup overlay and invalidate cached login; machine approval is explicit',async()=>{
+  for(const backendState of ['NeedsLogin','NeedsMachineAuth']) {
+    const {ui}=harness({getStatus:async()=>JSON.stringify({...loggedOut,backendState})});
+    ui.previewAccount=running;
+    await ui.restoreSession();assert.equal(ui.startupBlocking(),false);assert.equal(ui.hasAccount(),false);
+    assert.equal(ui.vpnToggleEnabled(),false);
+    if(backendState==='NeedsMachineAuth')assert.match(ui.message,/管理员批准/);
+  }
+});
+test('startup query failures do not leave an endless spinner or authorize VPN using the cache',async()=>{
+  const {ui}=harness({getStatus:async()=>{throw new Error('control unavailable');}});
+  ui.previewAccount=running;await ui.restoreSession();
+  assert.equal(ui.startupPhase,'failed');assert.equal(ui.busy,false);assert.match(ui.startupError,/control unavailable/);
+  assert.equal(ui.vpnToggleEnabled(),false);assert.equal(ui.hasAccount(),true);
+});
+test('control reconnection after readiness never restores a global overlay and OFF stays available',async()=>{
+  let restarting=false;
+  const {ui}=harness({getStatus:async()=>JSON.stringify({...running,backendState:restarting?'Starting':'Running'})});
+  await ui.restoreSession();await ui.setVpn(true);restarting=true;await ui.refreshData(true);
+  assert.equal(ui.startupBlocking(),false);assert.equal(ui.vpnToggleEnabled(),true);
+  await ui.setVpn(false);assert.equal(ui.vpnWanted(),false);
 });
 
 test('background and page disposal retain runtime recovery; explicit OFF cancels and persists it',async()=>{
@@ -546,6 +595,7 @@ test('cold launch restores saved account before Running and silently continues a
   const { ui, calls } = harness({ getStatus: async () => JSON.stringify({ ...running, backendState: ready ? 'Running' : 'Starting' }) });
   await ui.restoreSession();
   assert.equal(ui.restoringSession, false);
+  assert.equal(ui.startupBlocking(), true); assert.equal(ui.vpnToggleEnabled(), false);
   assert.equal(model.isAuthenticated(ui.status), true);
   assert.equal(ui.vpn.connected, false);
   assert.equal(ui.peers.length, 0);
@@ -559,6 +609,7 @@ test('cold launch restores saved account before Running and silently continues a
   t.mock.timers.tick(5000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(ui.peers.length, 1);
+  assert.equal(ui.startupBlocking(), false); assert.equal(ui.vpnToggleEnabled(), true);
   assert.equal(ui.busy, false);
   assert.notEqual(ui.vpnTimer, -1);
   ui.aboutToDisappear();
@@ -837,6 +888,7 @@ test('display cache renders an account before native startup without claiming au
   const { ui, calls } = harness({ start: () => new Promise((resolve) => { release = resolve; }) }, {}, {}, {}, files);
   const opening = ui.restoreSession();
   assert.equal(ui.restoringSession, false); assert.equal(ui.hasAccount(), true);
+  assert.equal(ui.startupBlocking(), true); assert.equal(ui.vpnToggleEnabled(), false);
   assert.equal(model.isAuthenticated(ui.status), false); assert.equal(ui.vpn.connected, false);
   assert.deepEqual(JSON.parse(JSON.stringify(ui.peers)), [onlinePeer]); assert.equal(ui.peersStale, true);
   assert.equal(ui.lastUpdated, 'last session'); assert.ok(!calls.includes('status')); await new Promise(resolve=>setImmediate(resolve));

@@ -23,6 +23,7 @@ extern "C" char *tailscale_ohos_start(char *, char *host) {
     return Owned(R"({"ok":true,"operation":"start","state":"started"})");
 }
 extern "C" char *tailscale_ohos_status() { return Owned(R"({"ok":true,"operation":"status","backendState":"Running","loggedIn":true})"); }
+extern "C" char *tailscale_ohos_configure_platform(char *) { return Owned(R"({"ok":true,"operation":"configurePlatform"})"); }
 extern "C" char *tailscale_ohos_start_service(char *, char *) { return Owned(R"({"ok":true,"operation":"startService","state":"started"})"); }
 extern "C" char *tailscale_ohos_detach_vpn() { return Owned(R"({"ok":true,"operation":"detachVpn","state":"started"})"); }
 extern "C" char *tailscale_ohos_connect_service(char *, char *) { return Owned(R"({"ok":true,"operation":"connectService","state":"started"})"); }

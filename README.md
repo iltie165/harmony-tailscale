@@ -52,6 +52,15 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
+### 3.3.3 platform metadata and startup readiness
+
+The extension reports the system API's actual OpenHarmony/HarmonyOS version
+and device model instead of Linux uname metadata. Saved login/display records
+remain behind a startup readiness overlay until live account, Running core and
+IPv4 are confirmed. Timeout/failure offers retry and diagnostics; later control
+reconnections do not block the whole page. Go/Tailscale versions are unchanged.
+See [3.3.3 verification and phone acceptance](docs/ui-3.3.3.md).
+
 ### 3.3.2 bottom safe-area background
 
 The root background explicitly extends into the system/cutout safe areas, and

@@ -8,6 +8,7 @@ import { VpnIntent } from './VpnRecoveryModel';
 import { inspectNetworks } from './NetworkEnvironment';
 import { NetworkServiceStore } from './NetworkServiceStore';
 import { serviceDeadline } from './NetworkServiceClient';
+import { configurePlatformInfo } from '../pages/PlatformInfo';
 
 export class PlatformNetworkService implements NetworkServicePort {
   private vpn: vpnExtension.VpnConnection;
@@ -24,6 +25,7 @@ export class PlatformNetworkService implements NetworkServicePort {
   }
   orphanedNetwork(): boolean { return this.orphan; }
   async boot(): Promise<string> {
+    await configurePlatformInfo();
     const raw: string = await tailscale.startService(`${this.dir}/tailscale`,this.hostname);
     const result = JSON.parse(raw) as CoreResult;
     if (result.ok) {

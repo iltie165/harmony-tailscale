@@ -182,7 +182,7 @@ struct Index {
         Text(this.view.vpn.connected ? `发送 ${this.view.vpn.txPackets} 包 · 接收 ${this.view.vpn.rxPackets} 包` : '仅连接 Tailnet IPv4 · 保留普通上网')
           .fontSize(11).fontColor(MUTED)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: this.view.vpnWanted || this.model.vpnRunning() }).enabled(!this.view.busy && !this.view.vpnChanging)
+      Toggle({ type: ToggleType.Switch, isOn: this.view.vpnWanted || this.model.vpnRunning() }).enabled(this.model.vpnToggleEnabled())
         .onChange((enabled: boolean) => { this.setVpn(enabled); })
         .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })
@@ -193,6 +193,11 @@ struct Index {
     if (this.view.status.backendState !== 'Running') {
       Text(this.view.corePaused ? '网络连接已暂停，账号记录已保留。' : '账号记录已保留，正在核对连接并同步设备…').fontSize(13).fontColor(MUTED)
         .width('100%').margin({ bottom: 16 })
+    }
+    if (this.view.startupPhase === 'failed') {
+      Text(this.view.startupError).fontSize(13).fontColor(MUTED).width('100%')
+      Button('重试连接').enabled(!this.view.busy).onClick(() => { this.model.retryStartup(); })
+        .fontColor(BLUE).backgroundColor('#E3EFFF').margin({ bottom: 16 })
     }
     if (this.view.status.health && this.view.status.health.length > 0) {
       Text(this.view.status.health.join('\n')).fontSize(12).fontColor('#966010')
@@ -332,6 +337,33 @@ struct Index {
     }
   }
 
+  @Builder
+  private startupOverlay() {
+    Column() {
+      Column({ space: 16 }) {
+        if (this.view.startupPhase === 'checking') {
+          LoadingProgress().width(40).height(40).color(BLUE)
+          Text('正在准备连接').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
+          Text(this.view.progress || '正在读取账号并启动网络服务…').fontSize(14).fontColor(MUTED)
+            .textAlign(TextAlign.Center)
+          Text('完成后即可开启 VPN').fontSize(12).fontColor(MUTED)
+        } else {
+          Text('连接尚未就绪').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
+          Text(this.view.startupError).fontSize(14).fontColor(MUTED).textAlign(TextAlign.Center)
+          Button(this.view.busy ? '正在等待系统操作结束…' : '重试连接').width('100%')
+            .enabled(!this.view.busy).fontColor(Color.White).backgroundColor(BLUE)
+            .onClick(() => { this.model.retryStartup(); })
+          Button('查看诊断').fontColor(BLUE).backgroundColor(Color.Transparent)
+            .onClick(() => { this.model.page = 'diagnostics'; this.model.dismissStartup(); })
+          Button('暂时查看账号与设备').fontColor(MUTED).backgroundColor(Color.Transparent)
+            .onClick(() => { this.model.dismissStartup(); })
+        }
+      }.width('100%').padding(28).backgroundColor(Color.White).borderRadius(24)
+    }.width('100%').height('100%').padding({ left: 24, right: 24, top: this.safeTop, bottom: this.safeBottom })
+      .justifyContent(FlexAlign.Center).backgroundColor('#D9EEF6FC')
+      .onClick(() => {}).accessibilityText(this.view.startupPhase === 'checking' ? '正在准备连接，完成后即可开启 VPN' : '连接尚未就绪')
+  }
+
   build() {
     Stack() {
     Scroll() {
@@ -339,17 +371,13 @@ struct Index {
         if (this.view.page === 'settings') { this.settings() }
         else if (this.view.page === 'diagnostics') { this.diagnostics() }
         else if (this.view.page === 'detail') { this.detail() }
-        else if (this.view.restoringSession) {
-          Column({ space: 16 }) {
-            LoadingProgress().width(36).height(36).color(BLUE)
-            Text('正在恢复账号…').fontSize(15).fontColor(MUTED)
-          }.width('100%').padding({ top: 100, bottom: 100 })
-        }
         else if (this.model.hasAccount()) { this.dashboard() }
         else { this.welcome() }
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })
     }.width('100%').height('100%').scrollBar(BarState.Off)
       .padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight })
+      .enabled(!this.view.startupBlocking)
+    if (this.view.startupBlocking) { this.startupOverlay() }
     }.width('100%').height('100%')
       .backgroundColor('#EEF6FC')
       .linearGradient({ angle: 165, colors: [['#EAF4FF', 0], ['#F6FAFD', 0.6], ['#EEF6FC', 1]] })

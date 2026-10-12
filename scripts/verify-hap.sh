@@ -69,7 +69,7 @@ docker run --rm --pull never --network none \
       echo "host descriptor fault-injection hook must not be packaged" >&2
       exit 1
     fi
-    for property in getVersion getStatus getLogs start startService connectService disconnectClient detachVpn login logout onlinePeers diagnostics close inspectVpnDescriptor startVpn getVpnStatus networkChanged tailscale_napi; do
+    for property in getVersion configurePlatform getStatus getLogs start startService connectService disconnectClient detachVpn login logout onlinePeers diagnostics close inspectVpnDescriptor startVpn getVpnStatus networkChanged tailscale_napi; do
       grep -Fxq "$property" <<<"$napi_strings"
     done
     go_symbols=$(readelf -Ws /verify/libtailscale_ohos.so)

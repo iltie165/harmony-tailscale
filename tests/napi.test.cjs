@@ -113,6 +113,9 @@ test('production NAPI module registers exactly the TypeScript contract', () => {
   assert.equal(version.coreProbe, true);
 });
 test('wrong argument counts and types are rejected before entering C ABI', () => {
+  for (const args of [[], [1], ['{}', 'extra'], ['a\0b']]) {
+    assert.throws(() => native.configurePlatform(...args), TypeError);
+  }
   for (const args of [[], ['/tmp', 'host', '100.64.1.1'], ['/tmp', 'host', '100.64.1.1', -1],
     ['/tmp', 'host', '100.64.1.1', 1.5], ['/tmp', 'host', '100.64.1.1', Infinity],
     ['/tmp', 'a\0b', '100.64.1.1', 1], ['/tmp', 'host', 42, 1], ['/tmp', 'host', '100.64.1.1', 1, 'extra']]) {
@@ -124,6 +127,13 @@ test('wrong argument counts and types are rejected before entering C ABI', () =>
   for (const fn of ['onlinePeers', 'diagnostics']) {
     assert.throws(() => native[fn](), TypeError);
     assert.throws(() => native[fn](42), TypeError);
+  }
+});
+test('platform metadata uses the asynchronous owned-string C ABI', async () => {
+  const result = await parse(native.configurePlatform('{"os":"openharmony","osVersion":"6.1.1.120","deviceModel":"test-phone"}'));
+  assert.equal(result.ok, true); assert.equal(result.operation, 'configurePlatform');
+  if (real) {
+    assert.equal((await parse(native.configurePlatform('{"os":"linux"}'))).ok, false);
   }
 });
 test('VPN NAPI startup and independent status use the real async ABI', async () => {
