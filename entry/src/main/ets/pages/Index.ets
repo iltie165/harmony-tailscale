@@ -351,6 +351,9 @@ struct Index {
     }.width('100%').height('100%').scrollBar(BarState.Off)
       .padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight })
     }.width('100%').height('100%')
+      .backgroundColor('#EEF6FC')
       .linearGradient({ angle: 165, colors: [['#EAF4FF', 0], ['#F6FAFD', 0.6], ['#EEF6FC', 1]] })
+      .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+        [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
   }
 }

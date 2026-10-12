@@ -52,6 +52,14 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
+### 3.3.2 bottom safe-area background
+
+The root background explicitly extends into the system/cutout safe areas, and
+the window surface uses the page's bottom color before content is loaded.
+Content retains its existing safe insets; system bars/gesture indicator remain
+visible. Core and recovery behavior is unchanged. See
+[3.3.2 verification and phone acceptance](docs/ui-3.3.2.md).
+
 ### 3.3.1 automatic VPN recovery Alpha
 
 Persistent user ON intent and a page-independent app-runtime supervisor now

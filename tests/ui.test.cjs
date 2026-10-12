@@ -777,6 +777,7 @@ function windowHarness(t) {
   let callback;
   const calls = [];
   const mainWindow = {
+    setWindowBackgroundColor: (color) => calls.push(['background', color]),
     setWindowSystemBarProperties: async (props) => calls.push(['bars', props]),
     setWindowLayoutFullScreen: async (enabled) => {
       assert.equal(storage.get('tailscale.safeTop'), 24);
@@ -797,9 +798,10 @@ function windowHarness(t) {
 test('edge-to-edge layout paints system bars, respects converted safe insets and updates on rotation', async (t) => {
   const { layout, areas, storage, calls, notify } = windowHarness(t);
   await layout.start();
-  assert.equal(calls[0][1].statusBarColor, '#EAF4FF');
-  assert.equal(calls[0][1].navigationBarColor, '#EEF6FC');
-  assert.equal(calls[0][1].statusBarContentColor, '#142337');
+  assert.deepEqual(calls[0], ['background', '#EEF6FC']);
+  assert.equal(calls[1][1].statusBarColor, '#EAF4FF');
+  assert.equal(calls[1][1].navigationBarColor, '#EEF6FC');
+  assert.equal(calls[1][1].statusBarContentColor, '#142337');
   assert.ok(calls.some((c) => Array.isArray(c) && c[0] === 'fullscreen' && c[1] === true));
   areas[0].topRect.height = 0; areas[2].topRect.height = 0; areas[2].leftRect.width = 90;
   areas[1].bottomRect.height = 60;
@@ -813,6 +815,7 @@ test('full-screen API failure leaves the avoid-area subscription removable', asy
   const { layout, mainWindow, calls, storage } = windowHarness(t);
   mainWindow.setWindowLayoutFullScreen = async () => { throw new Error('layout denied'); };
   await assert.rejects(layout.start(), /layout denied/);
+  assert.deepEqual(calls[0], ['background', '#EEF6FC']);
   layout.stop(); assert.equal(calls.filter((c) => c === 'unsubscribe').length, 1);
   assert.equal(storage.get('tailscale.safeTop'), 0); assert.equal(storage.get('tailscale.safeBottom'), 0);
 });

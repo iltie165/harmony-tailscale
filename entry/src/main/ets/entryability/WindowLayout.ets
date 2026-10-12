@@ -32,6 +32,10 @@ export class WindowLayout {
   }
 
   async start(): Promise<void> {
+    // The gesture-navigation area may expose the window surface rather than
+    // navigationBarColor (which controls the three-button navigation bar).
+    // Paint it before loading content, including during first-frame/layout gaps.
+    this.mainWindow.setWindowBackgroundColor('#EEF6FC');
     await this.mainWindow.setWindowSystemBarProperties({
       statusBarColor: '#EAF4FF', navigationBarColor: '#EEF6FC',
       statusBarContentColor: '#142337', navigationBarContentColor: '#142337'
