@@ -1,5 +1,11 @@
 import { VpnState, readVpnState, tailnetIPv4 } from './VpnSessionModel';
 import { ControlResult, readControl, isAuthenticated } from '../pages/ClientModel';
+import { VpnIntent } from './VpnRecoveryModel';
+
+export class ServiceBlocked extends Error {
+  reason: string;
+  constructor(reason: string, message: string) { super(message); this.reason = reason; }
+}
 
 export class ServiceCommand {
   version: number = 1;
@@ -7,6 +13,8 @@ export class ServiceCommand {
   commandId: string = '';
   enabled: boolean = false;
   shutdown: boolean = false;
+  repair: boolean = false;
+  intentId: string = '';
 }
 export class ServiceSnapshot extends VpnState {
   version: number = 1;
@@ -47,6 +55,9 @@ export function readServiceCommand(raw: string): ServiceCommand {
     !/^[0-9-]{1,80}$/.test(c.commandId) || typeof c.enabled !== 'boolean' || typeof c.shutdown !== 'boolean') {
     throw new Error('Invalid network service command');
   }
+  if ((c.repair !== undefined && typeof c.repair !== 'boolean') || (c.intentId !== undefined && typeof c.intentId !== 'string')) {
+    throw new Error('Invalid network service recovery command');
+  }
   return c;
 }
 export interface NetworkServicePort {
@@ -62,6 +73,7 @@ export interface NetworkServicePort {
   destroy(): Promise<void>;
   closeCore(): Promise<string>;
   request(): ServiceCommand | undefined;
+  intent(): VpnIntent | undefined;
   publish(snapshot: ServiceSnapshot): void;
   delay(): Promise<void>;
 }
@@ -76,17 +88,25 @@ export class NetworkServiceActor {
   private pendingDescriptor: number = -1;
   private nativeTouched: boolean = false;
   private blockedCommand: string = '';
+  private repairRequested: boolean = false;
+  private acceptedIntent: string = '';
   cancel(reason: string = 'system_destroyed'): void { if (!this.cancelled) { this.cancelled = true; this.reason = reason; } }
   private publish(port: NetworkServicePort, s: ServiceSnapshot): void {
     s.timestamp = Date.now(); port.publish(s);
   }
   private accept(port: NetworkServicePort, s: ServiceSnapshot): void {
+    const intent = port.intent();
+    if (intent && (!intent.enabled || (this.acceptedIntent && this.acceptedIntent !== intent.revision))) {
+      s.desiredEnabled = false;
+    }
     const c = port.request();
     if (!c || c.ownerId !== s.ownerId) { return; }
+    if (c.enabled && intent && (!intent.enabled || c.intentId !== intent.revision)) { return; }
     if (c.shutdown) { this.cancel('user_shutdown'); }
     if (c.commandId !== s.commandId) {
       s.commandId = c.commandId; s.desiredEnabled = c.enabled && !c.shutdown;
-      if (s.detached && s.destroyed && s.descriptorClosed) { s.error = ''; s.ok = true; }
+      this.acceptedIntent = c.intentId || ''; this.repairRequested = c.enabled && c.repair === true;
+      if (s.detached && s.destroyed && s.descriptorClosed) { s.error = ''; s.ok = true; s.stopReason = ''; }
     }
   }
   private check(port: NetworkServicePort, s: ServiceSnapshot): void {
@@ -117,7 +137,7 @@ export class NetworkServiceActor {
     if (error) { throw new Error(error); }
   }
   private async enable(port: NetworkServicePort, s: ServiceSnapshot, control: ControlResult): Promise<void> {
-    if (!isAuthenticated(control)) { throw new Error('账号需要重新认证，请先登录'); }
+    if (!isAuthenticated(control)) { throw new ServiceBlocked('authentication_required', '账号需要重新认证，请先登录'); }
     const ipv4 = control.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip));
     if (control.backendState !== 'Running' || !ipv4) {
       s.phase = 'waiting_core'; s.state = 'connecting'; this.publish(port,s); return;
@@ -160,6 +180,10 @@ export class NetworkServiceActor {
         this.accept(port,s);
         if (this.cancelled) { break; }
         try {
+          if (this.repairRequested) {
+            this.repairRequested = false;
+            await this.cleanup(port,s); this.check(port,s);
+          }
           if (!s.desiredEnabled && (!s.detached || !s.destroyed || this.pendingDescriptor >= 0)) {
             s.stopReason = 'user_off'; await this.cleanup(port,s);
           }
@@ -172,6 +196,7 @@ export class NetworkServiceActor {
           if (!current.coreAlive || current.coreId !== s.coreId) { this.cancel('core_failed'); throw new Error('Core process/generation changed'); }
           if (!current.ok) { throw new Error(current.error || 'Packet path failed'); }
           if (s.desiredEnabled && !s.detached) {
+            if (!current.attached) { throw new Error('System VPN interface lost'); }
             s.connected = current.connected; s.attached = current.attached;
             s.phase = current.connected ? 'connected' : 'reconnecting'; s.state = current.state;
             s.txPackets = current.txPackets; s.rxPackets = current.rxPackets;
@@ -188,7 +213,8 @@ export class NetworkServiceActor {
           if (s.commandId === command && s.desiredEnabled) { this.blockedCommand = command; }
           if (s.detached && s.destroyed && s.descriptorClosed) {
             if (!s.desiredEnabled) { s.phase='idle';s.state='disconnected';s.ok=true;s.error='';s.stopReason='user_off'; }
-            else { s.phase = 'error';s.state = 'error';s.ok = false;s.error = message;s.stopReason='operation_error'; }
+            else { s.phase = 'error';s.state = 'error';s.ok = false;s.error = message;
+              s.stopReason = e instanceof ServiceBlocked ? e.reason : 'operation_error'; }
           } else { s.stopReason='operation_error'; }
           this.publish(port,s);
         }

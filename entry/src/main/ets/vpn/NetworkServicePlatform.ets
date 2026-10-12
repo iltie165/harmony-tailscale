@@ -3,7 +3,9 @@ import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
-import { NetworkServicePort, ServiceSnapshot, ServiceCommand } from './NetworkServiceModel';
+import { NetworkServicePort, ServiceSnapshot, ServiceCommand, ServiceBlocked } from './NetworkServiceModel';
+import { VpnIntent } from './VpnRecoveryModel';
+import { inspectNetworks } from './NetworkEnvironment';
 import { NetworkServiceStore } from './NetworkServiceStore';
 import { serviceDeadline } from './NetworkServiceClient';
 
@@ -47,14 +49,22 @@ export class PlatformNetworkService implements NetworkServicePort {
   }
   control(): Promise<string> { return tailscale.getStatus(); }
   status(): Promise<string> { return tailscale.getVpnStatus(); }
-  create(ipv4: string): Promise<number> {
-    return this.vpn.create({
+  async create(ipv4: string): Promise<number> {
+    const environment = await inspectNetworks(ipv4);
+    if (environment.otherVpn) { throw new ServiceBlocked('other_vpn', '检测到其他 VPN，请先关闭它，再开启本应用 VPN'); }
+    if (!environment.online) { throw new Error('等待物理网络恢复'); }
+    try { return await this.vpn.create({
       addresses: [{address:{address:ipv4,family:1},prefixLength:32}],
       routes: [{interface:'',destination:{address:{address:'100.64.0.0',family:1},prefixLength:10},
         gateway:{address:'0.0.0.0',family:1},hasGateway:false,isDefaultRoute:false}],
       mtu:1280,isIPv4Accepted:true,isIPv6Accepted:false,isBlocking:false,
       blockedApplications:['com.ezoo.tailscaleprobe']
-    });
+    }); } catch (e) {
+      const error = e as BusinessError;
+      if (error.code === 201 || error.code === 2203001) { throw new ServiceBlocked('authorization_denied', '系统拒绝 VPN 创建，请检查授权'); }
+      if (error.code === 2203002) { throw new ServiceBlocked('other_vpn', '系统已有 VPN，停止自动恢复以避免争抢连接'); }
+      throw e as Error;
+    }
   }
   protect(): Promise<void> { return this.vpn.protectProcessNet(); }
   attach(fd: number, ipv4: string): Promise<string> {
@@ -71,6 +81,7 @@ export class PlatformNetworkService implements NetworkServicePort {
     return tailscale.close();
   }
   request(): ServiceCommand | undefined { return this.store.request(); }
+  intent(): VpnIntent | undefined { return this.store.intent(); }
   publish(snapshot: ServiceSnapshot): void { this.store.publish(snapshot); }
   delay(): Promise<void> { return new Promise<void>((resolve) => { setTimeout(resolve,500); }); }
 }

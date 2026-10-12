@@ -36,8 +36,17 @@ export class NetworkServiceClient {
   private bootstrap: Promise<ServiceSnapshot> | undefined = undefined;
   private sdkPending: number = 0;
   private mutation: boolean = false;
+  private cancelledEnable: number = 0;
   constructor(port: NetworkClientPort) { this.port = port; }
   pending(): boolean { return this.sdkPending>0 || this.mutation || this.bootstrap !== undefined; }
+  cancelEnable(): void {
+    this.cancelledEnable++;
+    const owner = this.read();
+    if (owner?.serviceReady) {
+      const c = new ServiceCommand(); c.ownerId = owner.ownerId; c.commandId = nonce();
+      this.port.command(c);
+    }
+  }
   private read(): ServiceSnapshot | undefined {
     try { return this.port.read(); } catch (_error) { return undefined; }
   }
@@ -113,18 +122,23 @@ export class NetworkServiceClient {
     }
     throw new Error('等待网络服务就绪超时，账号记录已保留');
   }
-  async setEnabled(enabled:boolean,progress:(message:string)=>void): Promise<ServiceSnapshot> {
+  async setEnabled(enabled:boolean,progress:(message:string)=>void,
+    current: () => boolean = (): boolean => true, intentId: string = '', repair: boolean = false): Promise<ServiceSnapshot> {
     if (this.mutation) { throw new Error('网络操作正在处理中'); }
     this.mutation=true;
+    const cancellation = this.cancelledEnable;
     let command: ServiceCommand | undefined = undefined;
     try {
       let owner=enabled?await this.ensure(progress):await this.observe();
+      if (enabled && (!current() || cancellation !== this.cancelledEnable)) { throw new Error('VPN 开启已取消'); }
       if (!owner) { throw new NetworkServiceError('无法确认 VPN 所属服务，请在系统设置中检查',false); }
       if (!enabled && owner.detached && owner.destroyed && owner.descriptorClosed) { return owner; }
       command=new ServiceCommand();command.ownerId=owner.ownerId;command.commandId=nonce();command.enabled=enabled;
+      command.intentId = intentId; command.repair = repair;
       this.port.command(command);
       const deadline=Date.now()+35000;
       while (Date.now()<deadline) {
+        if (enabled && (!current() || cancellation !== this.cancelledEnable)) { throw new Error('VPN 开启已取消'); }
         const s=this.read();
         if (s && s.ownerId===owner.ownerId && fresh(s)) {
           progress(enabled?'正在连接 VPN…':'正在关闭 VPN…');
@@ -142,7 +156,7 @@ export class NetworkServiceClient {
     } catch(e) {
       // Cancel a timed-out ON intent; late native/SDK completion must not leave
       // an unwanted interface enabled. The actor checks this after each await.
-      if (enabled && command) {
+      if (enabled && command && cancellation === this.cancelledEnable) {
         const cancel=new ServiceCommand();cancel.ownerId=command.ownerId;cancel.commandId=nonce();
         this.port.command(cancel);
       }

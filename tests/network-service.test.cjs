@@ -13,7 +13,8 @@ function compile(relative,deps={}) {
 }
 const controls=compile('pages/ClientModel');
 const vpn=compile('vpn/VpnSessionModel');
-const model=compile('vpn/NetworkServiceModel',{'./VpnSessionModel':vpn,'../pages/ClientModel':controls});
+const recovery=compile('vpn/VpnRecoveryModel');
+const model=compile('vpn/NetworkServiceModel',{'./VpnSessionModel':vpn,'../pages/ClientModel':controls,'./VpnRecoveryModel':recovery});
 const clients=compile('vpn/NetworkServiceClient',{'./NetworkServiceModel':model,'./VpnSessionModel':vpn,'../pages/ClientModel':controls});
 const running={ok:true,loggedIn:true,backendState:'Running',tailscaleIPs:['100.64.1.1']};
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
@@ -33,6 +34,7 @@ function actorHarness(t,overrides={}) {
     closeDescriptor:fd=>calls.push(['closeDescriptor',fd]),destroy:async()=>{calls.push('destroy');},
     closeCore:async()=>{calls.push('closeCore');alive=false;return '{"ok":true}';},
     request:()=>request,
+    intent:()=>undefined,
     publish:s=>{ latest=model.readServiceSnapshot(JSON.stringify(s));snapshots.push(latest); },
     delay:turn,...overrides
   };
@@ -55,6 +57,34 @@ test('actor boots without a system interface and retains one core across repeate
   assert.equal(h.calls.filter(x=>x==='boot').length,1);assert.equal(h.calls.filter(x=>x==='closeCore').length,0);
   assert.equal(h.calls.filter(x=>x==='attach').length,3);assert.equal(h.calls.filter(x=>x==='detach').length,3);
   assert.equal(h.calls.filter(x=>x==='destroy').length,3);
+});
+
+test('repair command replaces only the lost OS interface and retains the authoritative core',async t=>{
+  const h=actorHarness(t);await until(()=>h.latest()?.serviceReady);h.command(true);await until(()=>h.latest()?.connected);
+  h.setRequest(Object.assign(new model.ServiceCommand(),{ownerId:'1-2',commandId:'7-8',enabled:true,repair:true}));
+  await until(()=>h.latest()?.connected&&h.latest().commandId==='7-8');
+  assert.equal(h.calls.filter(x=>x==='boot').length,1);assert.ok(!h.calls.includes('closeCore'));
+  assert.equal(h.calls.filter(x=>x==='create').length,2);assert.equal(h.calls.filter(x=>x==='detach').length,1);
+  assert.equal(h.latest().coreId,'9-9');
+});
+
+test('persistent OFF cancels a late SDK creation even if OFF command publication is unavailable',async t=>{
+  let release;const intent=Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'8-9'});
+  const h=actorHarness(t,{intent:()=>intent,create:()=>new Promise(resolve=>{release=resolve;})});
+  await until(()=>h.latest()?.serviceReady);
+  h.setRequest(Object.assign(new model.ServiceCommand(),{ownerId:'1-2',commandId:'3-4',enabled:true,intentId:'8-9'}));
+  await until(()=>h.latest()?.phase==='create');intent.enabled=false;release(27);
+  await until(()=>h.latest()?.phase==='idle');assert.ok(!h.calls.includes('attach'));
+  assert.deepEqual(h.calls.filter(Array.isArray),[['closeDescriptor',27]]);
+});
+
+test('stale intent revisions cannot enable a new owner or revive a cancelled ON',async t=>{
+  const intent=Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'8-9'});
+  const h=actorHarness(t,{intent:()=>intent});await until(()=>h.latest()?.serviceReady);h.command(true);
+  await turn();await turn();assert.ok(!h.calls.includes('create'));
+  h.setRequest(Object.assign(new model.ServiceCommand(),{ownerId:'1-2',commandId:'4-5',enabled:true,intentId:'8-9'}));
+  await until(()=>h.latest()?.connected);intent.revision='9-10';
+  await until(()=>h.latest()?.phase==='idle');assert.equal(h.latest().desiredEnabled,false);
 });
 
 test('temporary control reconnect longer than old 90s timeout never tears down an attached VPN',async t=>{
@@ -152,6 +182,23 @@ test('client reuses a healthy existing core; normal OFF issues no SDK stop/start
   const h=clientHarness();await h.client.ensure(()=>{});await h.client.setEnabled(true,()=>{});await h.client.setEnabled(false,()=>{});
   assert.ok(!h.calls.includes('sdkStart'));assert.ok(!h.calls.includes('sdkStop'));assert.ok(!h.calls.includes('closeProxy'));
   assert.equal(h.snapshot.coreId,'9-9');assert.equal(h.snapshot.coreAlive,true);
+});
+
+test('confirmed stopped generation is replaced once and accepts a fresh recovery intent',async()=>{
+  const h=clientHarness();Object.assign(h.snapshot,{phase:'stopped',coreAlive:false,serviceReady:false,stopReason:'system_destroyed'});
+  h.port.start=async id=>{h.calls.push('sdkStart');Object.assign(h.snapshot,{ownerId:id,coreId:'11-12',coreAlive:true,serviceReady:true,phase:'idle',timestamp:Date.now()});};
+  const result=await h.client.setEnabled(true,()=>{},()=>true,'7-8');
+  assert.equal(result.connected,true);assert.equal(result.coreId,'11-12');
+  assert.equal(h.calls.filter(x=>x==='sdkStart').length,1);assert.equal(h.calls.filter(x=>x==='sdkStop').length,1);
+});
+
+test('OFF during pending SDK bootstrap fences ON before publishing an enable command',async()=>{
+  let release,available=false;
+  const h=clientHarness({read:()=>available?h.snapshot:undefined,start:()=>new Promise(resolve=>{release=()=>{available=true;h.snapshot.timestamp=Date.now();resolve();};})});
+  const opening=h.client.setEnabled(true,()=>{});const rejected=assert.rejects(opening,/取消/);
+  await turn();h.client.cancelEnable();release();await rejected;
+  assert.ok(!h.calls.some(x=>Array.isArray(x)&&x[0]==='command'&&x[1]));
+  assert.equal(h.snapshot.connected,false);assert.equal(h.snapshot.coreAlive,true);
 });
 
 test('stale heartbeat with a live native core is not grounds to replace it',async()=>{

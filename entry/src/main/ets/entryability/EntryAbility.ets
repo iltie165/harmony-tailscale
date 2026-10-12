@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
 import { WindowLayout } from './WindowLayout';
+import { getClientController } from '../pages/ClientController';
 
 const DOMAIN: number = 0x5453;
 const TAG: string = 'TailscaleProbe';
@@ -11,6 +12,7 @@ export default class EntryAbility extends UIAbility {
   private layout: WindowLayout | undefined = undefined;
   private stageDestroyed: boolean = false;
   onCreate(_want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+    getClientController().bindRuntime(this.context);
     hilog.info(DOMAIN, TAG, 'EntryAbility created');
   }
 
@@ -43,6 +45,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    getClientController().destroyRuntime();
     hilog.info(DOMAIN, TAG, 'EntryAbility destroyed');
   }
 

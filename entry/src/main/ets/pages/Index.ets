@@ -176,12 +176,13 @@ struct Index {
       Column({ space: 6 }) {
         Text('VPN').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
         Text(this.view.vpnChanging ? '正在切换…' : (this.view.vpnNeedsCleanup ? '关闭待确认' :
-          (this.view.vpn.connected ? '已开启' : (this.view.vpn.state === 'connecting' ? '正在重连…' : (this.view.vpn.ok ? '已关闭' : '连接异常')))))
+          (this.view.vpn.connected ? '已开启' : (this.view.vpnWanted ?
+            (this.view.recovery.phase === 'blocked' ? '恢复待处理' : '正在自动恢复…') : (this.view.vpn.ok ? '已关闭' : '连接异常')))))
           .fontSize(13).fontColor(this.view.vpn.connected ? BLUE : MUTED)
         Text(this.view.vpn.connected ? `发送 ${this.view.vpn.txPackets} 包 · 接收 ${this.view.vpn.rxPackets} 包` : '仅连接 Tailnet IPv4 · 保留普通上网')
           .fontSize(11).fontColor(MUTED)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: this.model.vpnRunning() }).enabled(!this.view.busy && !this.view.vpnChanging)
+      Toggle({ type: ToggleType.Switch, isOn: this.view.vpnWanted || this.model.vpnRunning() }).enabled(!this.view.busy && !this.view.vpnChanging)
         .onChange((enabled: boolean) => { this.setVpn(enabled); })
         .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })

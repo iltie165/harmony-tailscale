@@ -13,6 +13,9 @@ import { SessionPreview, SessionPreviewStore, previewOf } from './SessionPreview
 import { fileIo } from '@kit.CoreFileKit';
 import { NetworkServiceClient, NetworkServiceError } from '../vpn/NetworkServiceClient';
 import { PlatformNetworkClient } from '../vpn/NetworkClientPlatform';
+import { ServiceSnapshot } from '../vpn/NetworkServiceModel';
+import { VpnRecoverySupervisor, RecoveryReport } from '../vpn/VpnRecoveryModel';
+import { PlatformVpnRecovery } from '../vpn/VpnRecoveryPlatform';
 export class ClientView {
   page: string = 'main';
   status: ControlResult = {};
@@ -35,6 +38,8 @@ export class ClientView {
   vpn: VpnState = new VpnState();
   vpnChanging: boolean = false;
   vpnNeedsCleanup: boolean = false;
+  vpnWanted: boolean = false;
+  recovery: RecoveryReport = new RecoveryReport();
 }
 
 export class ClientController {
@@ -59,6 +64,8 @@ export class ClientController {
   public vpn: VpnState = new VpnState();
   public vpnChanging: boolean = false;
   public vpnNeedsCleanup: boolean = false;
+  public recovery: RecoveryReport = new RecoveryReport();
+  private supervisor: VpnRecoverySupervisor | undefined = undefined;
   private vpnTimer: number = -1;
   private vpnRequestId: string = '';
   private dataDir: string = '';
@@ -88,6 +95,13 @@ export class ClientController {
     emitter.on('tailscale.background',this.backgroundCallback);
     this.readAppVersion(); if (!this.busy) { this.restoreSession(); } this.notify();
   }
+  bindRuntime(context: common.UIAbilityContext): void {
+    this.appContext = context; this.dataDir = `${context.filesDir}/tailscale`;
+    this.networkClient();
+    this.supervisor?.start();
+  }
+  destroyRuntime(): void { this.supervisor?.stop(); }
+  vpnWanted(): boolean { return this.supervisor?.wanted() === true; }
 
   async readAppVersion(): Promise<void> {
     try {
@@ -135,7 +149,8 @@ export class ClientController {
     if (this.corePaused) { return '账号已保留 · 网络连接已暂停'; }
     if (!isAuthenticated(this.status)) { return '已保存账号 · 正在核对连接状态'; }
     if (this.status.backendState !== 'Running') { return '账号已保留 · 正在连接'; }
-    return this.vpnRunning() ? (this.vpn.connected ? '已登录 · VPN 已开启' : '已登录 · VPN 正在重连') : '已登录 · VPN 未开启';
+    return this.vpnWanted() || this.vpnRunning() ? (this.vpn.connected ? '已登录 · VPN 已开启' :
+      (this.recovery.phase === 'blocked' ? '已登录 · VPN 恢复待处理' : '已登录 · VPN 正在恢复')) : '已登录 · VPN 未开启';
   }
 
   private scheduleLoginRefresh(): void {
@@ -242,27 +257,31 @@ export class ClientController {
   }
 
   async disconnectVpn(): Promise<void> {
-    const network = this.networkClient();
-    const state = await network.setEnabled(false, (message: string) => {
+    this.networkClient();
+    await this.supervisor?.setWanted(false, (message: string) => {
       if (this.mounted) { this.progress = message; this.notify(); }
     });
-    if (this.mounted) { this.vpn = state; this.vpnNeedsCleanup = false; }
+    if (this.mounted) { this.vpnNeedsCleanup = false; }
   }
 
 
 
   async setVpn(enabled: boolean): Promise<void> {
-    if (this.busy || this.vpnChanging || (enabled === this.vpnRunning() && !this.vpnNeedsCleanup)) { return; }
+    if (this.busy || this.vpnChanging || (enabled === this.vpnWanted() && !this.vpnNeedsCleanup &&
+      (enabled ? this.vpn.connected : !this.vpnRunning()))) { return; }
     this.busy = true; this.vpnChanging = true; this.message = ''; this.notify();
     try {
+      // OFF must revoke recovery before waiting for an unrelated peer refresh.
+      if (!enabled) { await this.disconnectVpn(); }
       if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
       if (!this.mounted) { return; }
       if (enabled && !this.hasAccount()) { throw new Error('请先完成登录'); }
-      const state = await this.networkClient().setEnabled(enabled, (message: string) => {
+      this.networkClient();
+      if (enabled) { await this.supervisor?.setWanted(true, (message: string) => {
         if (this.mounted) { this.progress = message; this.notify(); }
-      });
+      }); }
       if (!this.mounted) { return; }
-      this.vpn = state; this.networkStarted = state.serviceReady; this.corePaused = false;
+      this.corePaused = false;
       this.vpnNeedsCleanup = false;
       this.message = enabled ? 'VPN 已开启。' : 'VPN 已关闭，核心和登录已保留。';
       try { await this.loadData(true); }
@@ -276,7 +295,7 @@ export class ClientController {
           uncertain.coreId=this.vpn.coreId;uncertain.coreAlive=this.vpn.coreAlive;
           uncertain.ipv4=this.vpn.ipv4;uncertain.attached=this.vpn.attached;this.vpn=uncertain;
         }
-        this.message = `VPN 操作失败：${e}`;
+        this.message = enabled && this.vpnWanted() ? `VPN 暂未连接：${e}；${this.recovery.phase === 'blocked' ? '自动恢复已暂停' : '将自动重试'}` : `VPN 操作失败：${e}`;
         if (this.vpnNeedsCleanup) { this.message += '；关闭状态待确认，请重试关闭或检查系统 VPN 设置。'; }
         // A live authentication result, never the display cache, can revoke the view.
         try { this.applyStatus(readControl(await tailscale.getStatus())); } catch (_error) {}
@@ -401,9 +420,9 @@ export class ClientController {
     this.busy = true;
     this.progress = '正在退出登录…';
     try {
+      if (this.vpnRunning() || this.vpnWanted()) { await this.disconnectVpn(); }
       if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
       if (!this.mounted) { return; }
-      if (this.vpnRunning()) { await this.disconnectVpn(); }
       const raw: string = await tailscale.logout();
       if (!this.mounted) { return; }
       this.output = safeOutput(raw);
@@ -436,6 +455,7 @@ export class ClientController {
         await this.openSystemBrowser('https://login.tailscale.com/');
         this.output = '系统浏览器已成功唤起。';
       } else if (operation === 'close') {
+        if (this.vpnWanted()) { await this.disconnectVpn(); }
         await this.networkClient().shutdown(); this.networkStarted = false;
         this.output = '网络服务已停止；账号凭据未注销。';
         // Closing a runtime is not revoking credentials. Keep the saved view.
@@ -455,7 +475,7 @@ export class ClientController {
       } else if (operation === 'status') {
         const raw: string = await tailscale.getStatus();
         const snapshot = this.networkPort?.read();
-        this.output = `${safeOutput(raw)}\nVPN：\n${safeOutput(await tailscale.getVpnStatus())}\n网络服务：\n${safeOutput(JSON.stringify(snapshot || {}))}`;
+        this.output = `${safeOutput(raw)}\nVPN：\n${safeOutput(await tailscale.getVpnStatus())}\n网络服务：\n${safeOutput(JSON.stringify(snapshot || {}))}\n自动恢复：\n${safeOutput(JSON.stringify(this.recovery))}`;
         this.applyStatus(readControl(raw));
       } else { this.output = safeOutput(await tailscale.diagnostics(this.dataDir)); }
     } catch (error) { this.output = `诊断失败：${error}`; }
@@ -526,7 +546,7 @@ export class ClientController {
       await this.ensureService();
       if (!this.mounted) { return; }
       if (previousCore && this.vpn.coreId!==previousCore && !this.vpn.connected) {
-        this.message='网络服务已恢复，VPN 未开启，请重新开启。';
+        this.message=this.vpnWanted() ? '网络服务已恢复，正在自动恢复 VPN。' : '网络服务已恢复，VPN 未开启。';
       }
       await this.refreshData(true);
     } catch(e) {
@@ -540,6 +560,33 @@ export class ClientController {
     if (!this.networkPort) { this.networkPort = new PlatformNetworkClient(this.appContext,this.hostname); }
     else { this.networkPort.update(this.appContext,this.hostname); }
     if (!this.network) { this.network = new NetworkServiceClient(this.networkPort); }
+    if (!this.supervisor) {
+      this.supervisor = new VpnRecoverySupervisor(new PlatformVpnRecovery(this.network, this.networkPort, this.appContext.filesDir,
+        (snapshot: ServiceSnapshot) => {
+          this.networkStarted = snapshot.serviceReady;
+          // Updating runtime state is allowed without a page; notify() never
+          // sends an unmounted observer a result.
+          this.vpn = snapshot;
+          this.vpnNeedsCleanup = (!snapshot.detached || !snapshot.destroyed || !snapshot.descriptorClosed) && !snapshot.ok;
+          this.notify();
+        }, (report: RecoveryReport) => {
+          const changed = this.recovery.phase !== report.phase || this.recovery.error !== report.error;
+          const next = new RecoveryReport(); next.phase = report.phase; next.attempts = report.attempts;
+          next.nextRetryAt = report.nextRetryAt; next.interruptedAt = report.interruptedAt;
+          next.recoveredAt = report.recoveredAt; next.lastRecoveryMs = report.lastRecoveryMs; next.error = report.error;
+          this.recovery = next;
+          if (report.phase === 'retry_wait' || report.phase === 'blocked') {
+            this.vpn.connected = false;
+          }
+          if (changed && report.phase !== 'off') {
+            if (report.phase === 'connected') { this.message = 'VPN 已恢复。'; }
+            else if (report.phase === 'blocked') { this.message = report.error; }
+            else { this.message = `VPN 正在自动恢复：${report.error}`; }
+          }
+          this.notify();
+        }));
+      this.supervisor.start();
+    }
     return this.network;
   }
   private async ensureService(): Promise<void> {
@@ -573,6 +620,7 @@ export class ClientController {
     view.vpn = this.vpn;
     view.vpnChanging = this.vpnChanging;
     view.vpnNeedsCleanup = this.vpnNeedsCleanup;
+    view.vpnWanted = this.vpnWanted(); view.recovery = this.recovery;
 
     const previous = this.lastView;
     if (previous && previous.page === view.page &&
@@ -595,7 +643,8 @@ export class ClientController {
       previous.appVersion === view.appVersion &&
       previous.vpn === view.vpn &&
       previous.vpnChanging === view.vpnChanging &&
-      previous.vpnNeedsCleanup === view.vpnNeedsCleanup) { return; }
+      previous.vpnNeedsCleanup === view.vpnNeedsCleanup && previous.vpnWanted === view.vpnWanted &&
+      previous.recovery === view.recovery) { return; }
     this.lastView = view;
     this.observer(view);
   }

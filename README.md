@@ -52,6 +52,15 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
+### 3.3.1 automatic VPN recovery Alpha
+
+Persistent user ON intent and a page-independent app-runtime supervisor now
+restore lost interfaces on a live core or recover a stopped service generation.
+Transient failures use bounded backoff; OFF/logout fence pending work. Auth or
+permission denial and another visible VPN pause recovery. System interface
+confirmation is required, but background execution and phone restart behavior
+are not yet device-verified. See [3.3.1 behavior and evidence](docs/vpn-3.3.1.md).
+
 ### Client UI and 3.3.0 unified-core Alpha
 
 3.3.0 moves login, discovery and VPN into one extension-owned service. The

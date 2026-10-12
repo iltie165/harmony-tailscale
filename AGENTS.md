@@ -29,6 +29,13 @@
   confirmed core failure or deliberate service shutdown permits replacement.
   Page disposal releases observers, not accepted service commands. Go owns
   only a duplicated FD; never rely on fstat on a phone VPN descriptor.
+- Recovery intent lives independently of service generations and display
+  metadata. OFF/logout cancel and persist OFF before awaiting peer refreshes;
+  late SDK work rechecks intent revision. The app supervisor may repair TUN or
+  recover a missing/dead owner, never replace a confirmed healthy core due to
+  control reconnect alone. Known auth/permission denial or a foreign visible
+  VPN suspends attempts. Do not claim timers wake a suspended/killed runtime
+  or that API24 distinguishes settings/manual stop from system termination.
 - Keep login URLs, private keys and signing passwords out of source/logs. Login
   URLs are returned only for browser dispatch; all log entrypoints redact them.
 

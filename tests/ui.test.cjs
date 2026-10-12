@@ -7,7 +7,7 @@ const path = require('node:path');
 const ts = require(process.env.TYPESCRIPT_MODULE);
 const root = path.resolve(__dirname, '..');
 const activeViews = new Set();
-afterEach(() => { for (const ui of activeViews) ui.aboutToDisappear(); activeViews.clear(); });
+afterEach(() => { for (const ui of activeViews) { ui.aboutToDisappear(); ui.destroyRuntime(); } activeViews.clear(); });
 function compile(source, name, dependencies = {}) {
   const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS }
@@ -101,8 +101,9 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
       renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); }
     } }
   });
+  const recovery = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnRecoveryModel.ets'), 'utf8'), 'recovery.cjs');
   const serviceModel = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/NetworkServiceModel.ets'), 'utf8'), 'service-model.cjs', {
-    './VpnSessionModel': sessionModel, '../pages/ClientModel': model
+    './VpnSessionModel': sessionModel, '../pages/ClientModel': model, './VpnRecoveryModel': recovery
   });
   const serviceClient = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/NetworkServiceClient.ets'), 'utf8'), 'service-client.cjs', {
     './NetworkServiceModel': serviceModel, './VpnSessionModel': sessionModel, '../pages/ClientModel': model
@@ -158,6 +159,15 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     }
     delay() { return new Promise(resolve=>setImmediate(resolve)); }
   }
+  class NetworkServiceStore {
+    intent() { const raw=files.get('/private/vpn-intent.json');return raw?recovery.readVpnIntent(raw):undefined; }
+    saveIntent(value) { files.set('/private/vpn-intent.json',JSON.stringify(value)); }
+  }
+  const recoveryPlatform=compile(fs.readFileSync(path.join(root,'entry/src/main/ets/vpn/VpnRecoveryPlatform.ets'),'utf8'),'recovery-platform.cjs',{
+    'libtailscale_napi.so':{default:native},'../pages/ClientModel':model,'./NetworkServiceClient':serviceClient,
+    './NetworkClientPlatform':{PlatformNetworkClient},'./NetworkServiceStore':{NetworkServiceStore},'./NetworkServiceModel':serviceModel,
+    './VpnRecoveryModel':recovery,'./NetworkEnvironment':{inspectNetworks:async()=>({online:true,ownVpn:sessionLive,otherVpn:false})}
+  });
   const source=fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ClientController.ets'), 'utf8');
   const { ClientController: Index } = compile(source, 'controller.cjs', {
     '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter },
@@ -168,7 +178,9 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     '../vpn/VpnProbeClient': vpnClient, '../vpn/VpnProbePlatform': platform,
     '../vpn/VpnSessionModel': sessionModel, '../vpn/VpnSessionClient': sessionClient,
     '../vpn/NetworkServiceClient': serviceClient,
-    '../vpn/NetworkClientPlatform': { PlatformNetworkClient }
+    '../vpn/NetworkServiceModel':serviceModel,
+    '../vpn/NetworkClientPlatform': { PlatformNetworkClient },
+    '../vpn/VpnRecoveryModel':recovery, '../vpn/VpnRecoveryPlatform':recoveryPlatform
   });
   const ui = new Index();
   activeViews.add(ui);
@@ -194,6 +206,32 @@ test('main VPN toggle commands a stable service and OFF retains core/account wit
   assert.equal(ui.status.loggedIn, true); assert.equal(ui.peers.length, 1);
   assert.ok(calls.includes('detachInterface')); assert.ok(calls.includes('destroyInterface')); assert.ok(!calls.includes('serviceStop')); assert.ok(!calls.includes('close'));
   assert.match(ui.message, /登录已保留/); ui.aboutToDisappear();
+});
+
+test('background and page disposal retain runtime recovery; explicit OFF cancels and persists it',async()=>{
+  const {ui,calls,files}=harness();ui.status=running;await ui.setVpn(true);
+  assert.equal(ui.vpnWanted(),true);assert.equal(JSON.parse(files.get('/private/vpn-intent.json')).enabled,true);
+  ui.backgroundCallback({});ui.aboutToDisappear();
+  assert.notEqual(ui.supervisor.timer,-1);calls.length=0;await ui.supervisor.check();
+  assert.ok(!calls.some(c=>Array.isArray(c)&&c[0]==='peers'));assert.equal(ui.vpnWanted(),true);
+  ui.mounted=true;await ui.setVpn(false);
+  assert.equal(JSON.parse(files.get('/private/vpn-intent.json')).enabled,false);assert.equal(ui.supervisor.timer,-1);
+});
+
+test('logout clears the persistent ON even after the current interface has already disappeared',async()=>{
+  const {ui,files}=harness();ui.status=running;await ui.setVpn(true);
+  ui.vpn.connected=false;ui.vpn.attached=false;ui.vpn.state='disconnected';
+  await ui.logout();assert.equal(JSON.parse(files.get('/private/vpn-intent.json')).enabled,false);
+  assert.equal(ui.vpnWanted(),false);assert.equal(ui.hasAccount(),false);
+});
+
+test('OFF revokes automatic recovery before an unrelated peer refresh completes',async()=>{
+  const {ui,files}=harness();ui.status=running;await ui.setVpn(true);
+  let release;ui.refreshTask=new Promise(resolve=>{release=resolve;});
+  const stopping=ui.setVpn(false);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(JSON.parse(files.get('/private/vpn-intent.json')).enabled,false);
+  assert.equal(ui.vpnWanted(),false);assert.equal(ui.vpn.connected,false);
+  release();await stopping;
 });
 
 test('accepted VPN intent outlives a page observer and releases UI mutation flags on completion',async()=>{
@@ -237,7 +275,7 @@ test('peer query failure after confirmed VPN startup does not mark VPN failed or
   assert.equal(ui.vpnNeedsCleanup, false); assert.equal(ui.vpn.connected, true);
   assert.match(ui.message, /VPN 已开启.*设备同步暂未完成/);
   assert.equal(calls.filter((c) => c === 'close').length, 0);
-  assert.equal(calls.filter((c) => c === 'start').length, 1);
+  assert.equal(calls.filter((c) => c === 'serviceStart').length, 1);
   assert.ok(!calls.includes('vpnStop')); ui.aboutToDisappear();
 });
 test('VPN rejects conflicting diagnostic/probe controls and unmount does not turn it off', async () => {
