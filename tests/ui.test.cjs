@@ -95,6 +95,7 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
   assert.ok(marker > 0, 'UI method/compiler boundary must exist');
   const source = full.slice(0, marker)
     .replace('@Entry\n@Component\nstruct Index', 'export class Index')
+    .replace(/@StorageLink\('[^']+'\) /g, '')
     .replace(/@State /g, '') + '\n}\n';
   const { Index } = compile(source, 'index.cjs', {
     '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter },
@@ -485,4 +486,155 @@ test('logout/status transitions clear device detail and never leave stale online
   assert.equal(ui.page, 'main');
   assert.equal(ui.selectedPeer, undefined);
   assert.deepEqual(ui.peers, []);
+});
+
+test('silent refresh keeps controls enabled, notice and diagnostics unchanged; equal models keep identity', async () => {
+  let release;
+  let delayed = false;
+  const { ui } = harness({ getStatus: async () => {
+    if (delayed) await new Promise((resolve) => { release = resolve; });
+    return JSON.stringify(running);
+  } });
+  await ui.refreshData();
+  const status = ui.status, peers = ui.peers, vpn = ui.vpn;
+  ui.page = 'detail'; ui.selectedPeer = peers[0]; ui.message = 'VPN 已开启';
+  ui.progress = 'idle'; ui.output = 'manually inspected diagnostic'; ui.lastUpdated = 'unchanged timestamp';
+  delayed = true;
+  const pending = ui.refreshData(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.busy, false); assert.equal(ui.progress, 'idle');
+  assert.equal(ui.message, 'VPN 已开启'); assert.ok(ui.refreshTask);
+  const duplicate = ui.refreshData(true);
+  release(); await Promise.all([pending, duplicate]);
+  assert.equal(ui.status, status); assert.equal(ui.peers, peers); assert.equal(ui.vpn, vpn);
+  assert.equal(ui.selectedPeer, peers[0]); assert.equal(ui.page, 'detail');
+  assert.equal(ui.lastUpdated, 'unchanged timestamp');
+  assert.equal(ui.output, 'manually inspected diagnostic'); assert.equal(ui.refreshTask, undefined);
+  ui.aboutToDisappear();
+});
+
+test('silent refresh applies changed peers/detail and packet counters without a global loading state', async () => {
+  const changed = { ...onlinePeer, hostName: 'renamed-host' };
+  let nextPeers = [onlinePeer];
+  const live = Object.assign(new sessionModel.VpnState(), { connected: true, state: 'connected', ipv4: '100.64.1.1' });
+  const { ui } = harness({
+    getVpnStatus: async () => JSON.stringify(live),
+    onlinePeers: async () => JSON.stringify({ ok: true, peers: nextPeers })
+  });
+  await ui.refreshData(); ui.page = 'detail'; ui.selectedPeer = ui.peers[0];
+  nextPeers = [changed]; live.rxPackets = 15;
+  await ui.refreshData(true);
+  assert.equal(ui.busy, false); assert.equal(ui.page, 'detail');
+  assert.equal(ui.peers[0].hostName, 'renamed-host'); assert.equal(ui.selectedPeer, ui.peers[0]);
+  assert.equal(ui.vpn.rxPackets, 15);
+  ui.aboutToDisappear();
+});
+
+test('periodic VPN timer uses silent refresh and leaves the existing notice intact', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const { ui } = harness(); ui.status = running;
+  await ui.setVpn(true); const notice = ui.message;
+  ui.output = 'last diagnostic';
+  t.mock.timers.tick(5000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.busy, false); assert.equal(ui.message, notice); assert.equal(ui.output, 'last diagnostic');
+  assert.ok(ui.vpnTimer !== -1);
+  ui.aboutToDisappear();
+});
+
+test('VPN handoff waits for an in-flight silent refresh before closing its backend', async () => {
+  let release;
+  let first = true;
+  const { ui, calls } = harness({ getStatus: async () => {
+    if (first) { first = false; await new Promise((resolve) => { release = resolve; }); }
+    return JSON.stringify(running);
+  } });
+  ui.status = running;
+  const refresh = ui.refreshData(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  const switching = ui.setVpn(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.busy, true); assert.ok(!calls.includes('close'));
+  release(); await Promise.all([refresh, switching]);
+  assert.ok(calls.indexOf('close') > calls.findIndex((c) => Array.isArray(c) && c[0] === 'peers'));
+  assert.equal(ui.vpn.connected, true); assert.equal(ui.busy, false);
+  ui.aboutToDisappear();
+});
+
+test('silent polling reports real failures and does not rearm after unmount', async () => {
+  let release;
+  const { ui } = harness({ onlinePeers: async () => { throw new Error('peer API failed'); } });
+  ui.peers = [onlinePeer];
+  await ui.refreshData(true);
+  assert.match(ui.message, /peer API failed/); assert.deepEqual(ui.peers, []); assert.equal(ui.busy, false);
+  const late = harness({ getStatus: async () => {
+    await new Promise((resolve) => { release = resolve; }); throw new Error('late failure');
+  } }).ui;
+  const pending = late.refreshData(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  late.message = 'detached'; late.aboutToDisappear(); release(); await pending;
+  assert.equal(late.message, 'detached'); assert.equal(late.vpnTimer, -1); assert.equal(late.refreshTask, undefined);
+});
+
+function windowHarness(t) {
+  const previous = globalThis.AppStorage;
+  const storage = new Map();
+  globalThis.AppStorage = { setOrCreate: (key, value) => storage.set(key, value) };
+  t.after(() => { globalThis.AppStorage = previous; });
+  const types = { TYPE_SYSTEM: 0, TYPE_NAVIGATION_INDICATOR: 1, TYPE_CUTOUT: 2 };
+  const areas = [
+    { topRect: { height: 72 }, bottomRect: { height: 0 }, leftRect: { width: 0 }, rightRect: { width: 0 } },
+    { topRect: { height: 0 }, bottomRect: { height: 48 }, leftRect: { width: 0 }, rightRect: { width: 0 } },
+    { topRect: { height: 60 }, bottomRect: { height: 0 }, leftRect: { width: 0 }, rightRect: { width: 0 } }
+  ];
+  let callback;
+  const calls = [];
+  const mainWindow = {
+    setWindowSystemBarProperties: async (props) => calls.push(['bars', props]),
+    setWindowLayoutFullScreen: async (enabled) => {
+      assert.equal(storage.get('tailscale.safeTop'), 24);
+      assert.equal(storage.get('tailscale.safeBottom'), 16);
+      calls.push(['fullscreen', enabled]);
+    },
+    getUIContext: () => ({ px2vp: (px) => px / 3 }),
+    getWindowAvoidArea: (type) => areas[type],
+    on: (event, handler) => { assert.equal(event, 'avoidAreaChange'); callback = handler; calls.push('subscribe'); },
+    off: (event, handler) => { assert.equal(event, 'avoidAreaChange'); assert.equal(handler, callback); calls.push('unsubscribe'); }
+  };
+  const { WindowLayout } = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/entryability/WindowLayout.ets'), 'utf8'), 'window-layout.cjs', {
+    '@kit.ArkUI': { window: { AvoidAreaType: types } }
+  });
+  return { layout: new WindowLayout(mainWindow), mainWindow, areas, storage, calls, notify: () => callback({}) };
+}
+
+test('edge-to-edge layout paints system bars, respects converted safe insets and updates on rotation', async (t) => {
+  const { layout, areas, storage, calls, notify } = windowHarness(t);
+  await layout.start();
+  assert.equal(calls[0][1].statusBarColor, '#EAF4FF');
+  assert.equal(calls[0][1].navigationBarColor, '#EEF6FC');
+  assert.equal(calls[0][1].statusBarContentColor, '#142337');
+  assert.ok(calls.some((c) => Array.isArray(c) && c[0] === 'fullscreen' && c[1] === true));
+  areas[0].topRect.height = 0; areas[2].topRect.height = 0; areas[2].leftRect.width = 90;
+  areas[1].bottomRect.height = 60;
+  notify();
+  assert.equal(storage.get('tailscale.safeTop'), 0); assert.equal(storage.get('tailscale.safeLeft'), 30);
+  assert.equal(storage.get('tailscale.safeBottom'), 20);
+  layout.stop(); layout.stop(); assert.equal(calls.filter((c) => c === 'unsubscribe').length, 1);
+});
+
+test('full-screen API failure leaves the avoid-area subscription removable', async (t) => {
+  const { layout, mainWindow, calls, storage } = windowHarness(t);
+  mainWindow.setWindowLayoutFullScreen = async () => { throw new Error('layout denied'); };
+  await assert.rejects(layout.start(), /layout denied/);
+  layout.stop(); assert.equal(calls.filter((c) => c === 'unsubscribe').length, 1);
+  assert.equal(storage.get('tailscale.safeTop'), 0); assert.equal(storage.get('tailscale.safeBottom'), 0);
+});
+
+test('destroying the stage during pending window setup prevents a late subscription', async (t) => {
+  const { layout, mainWindow, calls } = windowHarness(t);
+  let release;
+  mainWindow.setWindowSystemBarProperties = () => new Promise((resolve) => { release = resolve; });
+  const pending = layout.start(); layout.stop(); release(); await pending;
+  assert.ok(!calls.includes('subscribe'));
+  assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === 'fullscreen'));
 });

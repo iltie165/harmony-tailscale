@@ -212,6 +212,7 @@ func (b *serviceBackend) Start() (err error) {
 		return err
 	}
 	sys.Set(engine)
+	installLocalPingResponder(sys, b.router.address)
 	stateStore, err := store.New(bridgeLogf, filepath.Join(b.dir, "tailscaled.state"))
 	if err != nil {
 		return err

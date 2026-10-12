@@ -19,8 +19,10 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -48,13 +50,12 @@ func socketTun(t *testing.T) (*packetTun, int, int) {
 }
 func receivePacket(t *testing.T, fd int) []byte {
 	t.Helper()
-	p := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-	n, err := unix.Poll(p, 10000)
-	if err != nil || n == 0 {
+	ready, err := waitTestPacket(fd, 10*time.Second)
+	if err != nil || !ready {
 		t.Fatalf("packet receive timed out: %v", err)
 	}
 	buffer := make([]byte, 2048)
-	n, err = unix.Read(fd, buffer)
+	n, err := unix.Read(fd, buffer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +280,7 @@ func TestOfficialEngineEncryptedIPv4PacketsBothDirections(t *testing.T) {
 		}
 		engines[i] = engine
 		sys.Set(engine)
+		installLocalPingResponder(sys, ips[i].Addr())
 		engine.SetFilter(filter.NewAllowAllForTest(logger.Discard))
 		sys.Tun.Get().Start()
 		t.Cleanup(func() {
@@ -315,6 +317,112 @@ func TestOfficialEngineEncryptedIPv4PacketsBothDirections(t *testing.T) {
 			if got := receivePacket(t, fds[i^1]); !bytes.Equal(packet, got) {
 				t.Fatalf("protocol %d decrypted packet differs: %x != %x", protocol, got, packet)
 			}
+		}
+	}
+	t.Run("ICMPRepliesThroughEncryptedTransportWithoutOS", func(t *testing.T) {
+		for i := 0; i < 2; i++ {
+			request := echoTestPacket(ips[i].Addr(), ips[i^1].Addr())
+			if _, err := unix.Write(fds[i], request); err != nil {
+				t.Fatal(err)
+			}
+			reply := receivePacket(t, fds[i])
+			var parsed packet.Parsed
+			parsed.Decode(reply)
+			if !parsed.IsEchoResponse() || parsed.Src.Addr() != ips[i^1].Addr() || parsed.Dst.Addr() != ips[i].Addr() || !bytes.Equal(reply[24:], request[24:]) {
+				t.Fatalf("invalid ICMP reply: %x", reply)
+			}
+			if !validChecksum(reply[:20]) || !validChecksum(reply[20:]) {
+				t.Fatalf("invalid reply checksum: %x", reply)
+			}
+			assertNoPacket(t, fds[i^1]) // consumed, not delivered to the OS
+			assertNoPacket(t, fds[i])   // exactly one reply
+		}
+	})
+	t.Run("ICMPDeniedByOfficialInboundFilterGetsNoReply", func(t *testing.T) {
+		engines[1].SetFilter(filter.NewAllowNone(logger.Discard, nil))
+		if _, err := unix.Write(fds[0], echoTestPacket(ips[0].Addr(), ips[1].Addr())); err != nil {
+			t.Fatal(err)
+		}
+		assertNoPacket(t, fds[0])
+		assertNoPacket(t, fds[1])
+	})
+}
+
+func echoTestPacket(src, dst netip.Addr) []byte {
+	h := packet.ICMP4Header{IP4Header: packet.IP4Header{Src: src, Dst: dst, IPProto: ipproto.ICMPv4}, Type: packet.ICMP4EchoRequest}
+	return packet.Generate(&h, []byte{0x12, 0x34, 0x56, 0x78, 'p', 'i', 'n', 'g', '!'})
+}
+
+func validChecksum(buf []byte) bool {
+	var sum uint32
+	for len(buf) >= 2 {
+		sum += uint32(binary.BigEndian.Uint16(buf[:2]))
+		buf = buf[2:]
+	}
+	if len(buf) != 0 {
+		sum += uint32(buf[0]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = sum&0xffff + sum>>16
+	}
+	return uint16(sum) == 0xffff
+}
+
+func assertNoPacket(t *testing.T, fd int) {
+	t.Helper()
+	if ready, err := waitTestPacket(fd, 250*time.Millisecond); err != nil || ready {
+		t.Fatalf("unexpected packet or poll failure: %v, %v", ready, err)
+	}
+}
+
+// Go's async preemption can interrupt poll, especially under -race. Retrying
+// EINTR must keep the original deadline; it is not a packet arrival or timeout.
+func waitTestPacket(fd int, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	p := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false, nil
+		}
+		n, err := unix.Poll(p, int((remaining+time.Millisecond-1)/time.Millisecond))
+		if err == unix.EINTR {
+			continue
+		}
+		return n > 0, err
+	}
+}
+
+func TestLocalPingResponderDoesNotConsumeOtherTraffic(t *testing.T) {
+	sys := tsd.NewSystem()
+	tun, _, _ := socketTun(t)
+	// Obtain the official wrapper from a real engine, with no public networking.
+	mon := netmon.NewStatic()
+	sys.Set(mon)
+	address := netip.MustParseAddr("100.64.1.1")
+	engine, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{Tun: tun, Router: &platformRouter{address: address}, NetMon: mon, SetSubsystem: sys.Set, EventBus: sys.Bus.Get(), HealthTracker: sys.HealthTracker(), Metrics: sys.UserMetricsRegistry()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys.Set(engine)
+	defer func() {
+		tun.Close()
+		engine.Close()
+		<-engine.Done()
+		sys.Dialer.Get().Close()
+		mon.Close()
+		sys.Bus.Get().Close()
+	}()
+	installLocalPingResponder(sys, address)
+	for _, raw := range [][]byte{
+		ipv4TestPacket(netip.MustParseAddr("100.64.1.2"), address, 6),
+		ipv4TestPacket(netip.MustParseAddr("100.64.1.2"), address, 17),
+		echoTestPacket(netip.MustParseAddr("100.64.1.2"), netip.MustParseAddr("100.64.1.3")),
+	} {
+		var parsed packet.Parsed
+		parsed.Decode(raw)
+		if verdict, _ := sys.Tun.Get().PostFilterPacketInboundFromWireGuard(&parsed, sys.Tun.Get(), nil); verdict != filter.Accept {
+			t.Fatal("consumed non-local echo or application traffic")
 		}
 	}
 }

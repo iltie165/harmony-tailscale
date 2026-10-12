@@ -17,6 +17,10 @@ const MUTED: string = '#6D8094';
 @Entry
 @Component
 struct Index {
+  @StorageLink('tailscale.safeTop') private safeTop: number = 0;
+  @StorageLink('tailscale.safeBottom') private safeBottom: number = 0;
+  @StorageLink('tailscale.safeLeft') private safeLeft: number = 0;
+  @StorageLink('tailscale.safeRight') private safeRight: number = 0;
   @State private page: string = 'main';
   @State private status: ControlResult = {};
   @State private peers: PeerInfo[] = [];
@@ -42,9 +46,10 @@ struct Index {
   private restoreDeadline: number = 0;
   private foreground: boolean = true;
   private mounted: boolean = false;
+  private refreshTask: Promise<void> | undefined = undefined;
   private foregroundCallback = (_event: emitter.EventData): void => {
     this.foreground = true;
-    if (!this.busy) { this.refreshData(); }
+    if (!this.busy) { this.refreshData(true); }
   };
   private backgroundCallback = (_event: emitter.EventData): void => { this.foreground = false; };
 
@@ -88,14 +93,14 @@ struct Index {
     if (!this.awaitingLogin && Date.now() >= this.restoreDeadline) { return; }
     this.pollTimer = setTimeout(() => {
       this.pollTimer = -1;
-      if (this.foreground && !this.busy) { this.refreshData(); }
+      if (this.foreground && !this.busy) { this.refreshData(true); }
       else { this.scheduleLoginRefresh(); }
     }, 2000);
   }
 
   private applyStatus(result: ControlResult): void {
     if (!this.mounted) { return; }
-    this.status = result;
+    if (JSON.stringify(this.status) !== JSON.stringify(result)) { this.status = result; }
     if (!isAuthenticated(result)) {
       this.peers = [];
       this.selectedPeer = undefined;
@@ -108,21 +113,33 @@ struct Index {
     }
   }
 
-  private async loadData(): Promise<void> {
+  private async loadData(silent: boolean = false): Promise<void> {
     const vpnRaw: string = await tailscale.getVpnStatus();
     if (!this.mounted) { return; }
-    this.vpn = readVpnState(vpnRaw);
+    const nextVpn = readVpnState(vpnRaw);
+    // Logs change independently of product state; don't redraw the dashboard
+    // merely because the native log ring changed. Diagnostics fetch them on demand.
+    if (this.vpn.ok !== nextVpn.ok || this.vpn.connected !== nextVpn.connected ||
+      this.vpn.state !== nextVpn.state || this.vpn.ipv4 !== nextVpn.ipv4 ||
+      this.vpn.txPackets !== nextVpn.txPackets || this.vpn.rxPackets !== nextVpn.rxPackets ||
+      this.vpn.txBytes !== nextVpn.txBytes || this.vpn.rxBytes !== nextVpn.rxBytes ||
+      this.vpn.error !== nextVpn.error) { this.vpn = nextVpn; }
     if (!this.vpn.ok) { this.vpnNeedsCleanup = true; throw new Error(this.vpn.error || 'VPN service unavailable'); }
     const raw: string = await tailscale.getStatus();
     if (!this.mounted) { return; }
-    this.output = safeOutput(raw);
+    if (!silent) { this.output = safeOutput(raw); }
     this.applyStatus(readControl(raw));
     if (isAuthenticated(this.status)) {
       const peerRaw: string = await tailscale.onlinePeers(this.peerFilter.trim());
       if (!this.mounted) { return; }
-      this.output = safeOutput(peerRaw);
-      this.peers = readPeers(peerRaw);
-      this.lastUpdated = new Date().toLocaleTimeString();
+      if (!silent) { this.output = safeOutput(peerRaw); }
+      const nextPeers = readPeers(peerRaw);
+      const changed = JSON.stringify(this.peers) !== JSON.stringify(nextPeers);
+      if (changed) {
+        this.peers = nextPeers;
+        if (this.selectedPeer) { this.selectedPeer = nextPeers.find((peer: PeerInfo) => peer.id === this.selectedPeer?.id); }
+      }
+      if (changed || !silent) { this.lastUpdated = new Date().toLocaleTimeString(); }
     }
     this.scheduleVpnRefresh();
   }
@@ -132,7 +149,7 @@ struct Index {
     if (!this.mounted || !this.vpnRunning()) { return; }
     this.vpnTimer = setTimeout(() => {
       this.vpnTimer = -1;
-      if (this.foreground && !this.busy) { this.refreshData(); }
+      if (this.foreground && !this.busy) { this.refreshData(true); }
       else { this.scheduleVpnRefresh(); }
     }, 5000);
   }
@@ -161,6 +178,8 @@ struct Index {
     if (this.busy || this.vpnChanging || (enabled === this.vpnRunning() && !this.vpnNeedsCleanup)) { return; }
     this.busy = true; this.vpnChanging = true; this.message = '';
     try {
+      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
+      if (!this.mounted) { return; }
       if (vpnSdkPending()) { throw new Error('Previous VPN SDK operation is still pending'); }
       if (enabled) {
         if (this.vpnNeedsCleanup) { throw new Error('请先关闭 VPN，完成上一次清理'); }
@@ -217,19 +236,28 @@ struct Index {
     } finally { this.busy = false; this.scheduleLoginRefresh(); }
   }
 
-  private async refreshData(): Promise<void> {
+  private async refreshData(silent: boolean = false): Promise<void> {
     if (this.busy || !this.mounted) { return; }
-    this.busy = true;
-    this.progress = '正在更新状态与设备…';
-    this.message = '';
-    try { await this.loadData(); }
+    if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); return; }
+    if (!silent) {
+      this.busy = true;
+      this.progress = '正在更新状态与设备…';
+      this.message = '';
+    }
+    this.refreshTask = this.loadData(silent);
+    try { await this.refreshTask; }
     catch (error) {
-      this.message = `刷新失败：${error}`;
-      this.peers = [];
-      this.lastUpdated = '';
+      if (this.mounted) {
+        this.message = `刷新失败：${error}`;
+        this.peers = [];
+        this.selectedPeer = undefined;
+        this.lastUpdated = '';
+      }
     } finally {
-      this.busy = false;
+      this.refreshTask = undefined;
+      if (!silent) { this.busy = false; }
       this.scheduleLoginRefresh();
+      this.scheduleVpnRefresh();
     }
   }
 
@@ -253,6 +281,8 @@ struct Index {
     this.message = '';
     this.progress = '正在获取安全登录链接…';
     try {
+      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
+      if (!this.mounted) { return; }
       readControl(await tailscale.start(this.dataDir, this.hostname));
       if (!this.mounted) { return; }
       const raw: string = await tailscale.login();
@@ -287,6 +317,8 @@ struct Index {
     this.busy = true;
     this.progress = '正在退出登录…';
     try {
+      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
+      if (!this.mounted) { return; }
       if (this.vpnRunning()) { await this.disconnectVpn(); }
       const raw: string = await tailscale.logout();
       if (!this.mounted) { return; }
@@ -308,6 +340,8 @@ struct Index {
     this.busy = true;
     this.progress = '正在执行诊断…';
     try {
+      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
+      if (!this.mounted) { return; }
       if (this.vpnRunning() && (operation === 'close' || operation === 'start')) {
         throw new Error('VPN 运行期间请使用主界面开关管理核心');
       }
@@ -359,6 +393,8 @@ struct Index {
     };
     const port = new PlatformVpnProbeRequest(want, this.appContext.filesDir);
     try {
+      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
+      if (!this.mounted) { return; }
       const report = await requestVpnProbe(port, requestId, () => !this.mounted,
         (stage: string, raw: string) => {
           if (!this.mounted) { return; }
@@ -566,7 +602,10 @@ struct Index {
       Text('仅展示当前账号可见的在线设备；不支持 ACL group: 组查询。')
         .fontSize(11).fontColor(MUTED).width('100%').margin({ bottom: 12 })
     }
-    ForEach(this.peers, (peer: PeerInfo) => { this.peerCard(peer) }, (peer: PeerInfo) => peer.id)
+    // Stable unchanged rows; a changed row gets a new key so ForEach updates
+    // its non-Observed PeerInfo builder instead of retaining stale text.
+    ForEach(this.peers, (peer: PeerInfo) => { this.peerCard(peer) },
+      (peer: PeerInfo) => `${peer.id}:${JSON.stringify(peer)}`)
     if (this.peers.length === 0 && !this.busy) {
       Column({ space: 12 }) {
         this.icon($r('app.media.device_desktop'), 36)
@@ -623,7 +662,7 @@ struct Index {
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.page = 'diagnostics'; }).margin({ bottom: 24 })
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
-    Text('3.2.0 Alpha · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
+    Text('3.2.1 Alpha · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
     Text('VPN Alpha：支持登录、在线设备和 Tailnet IPv4 互通。暂不支持 MagicDNS、IPv6、出口节点和子网路由。')
       .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 16 })
   }
@@ -681,6 +720,7 @@ struct Index {
   }
 
   build() {
+    Stack() {
     Scroll() {
       Column({ space: 8 }) {
         if (this.page === 'settings') { this.settings() }
@@ -690,6 +730,8 @@ struct Index {
         else { this.welcome() }
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })
     }.width('100%').height('100%').scrollBar(BarState.Off)
+      .padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight })
+    }.width('100%').height('100%')
       .linearGradient({ angle: 165, colors: [['#EAF4FF', 0], ['#F6FAFD', 0.6], ['#EEF6FC', 1]] })
   }
 }

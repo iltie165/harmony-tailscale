@@ -52,7 +52,7 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
-### Client UI and 3.2.0 VPN Alpha
+### Client UI and 3.2.1 VPN Alpha
 
 The Chinese-language client UI separates the welcome/login screen from the
 signed-in device list. It displays the real account, Tailnet, local Tailscale
@@ -67,8 +67,12 @@ login and destroys the owned interface after joining packet I/O. UI/extension
 ownership uses a state lease and private Unix LocalAPI, not duplicate nodes.
 No default route or system DNS override is installed. MagicDNS, IPv6, exit nodes
 and subnet routes are outside this Alpha. Host encrypted packet tests and actual
-target builds passed; new phone traffic/background/network acceptance remains
-separate. See [VPN Alpha and testing](docs/vpn-alpha.md).
+target builds passed. The user has confirmed Moonlight streaming from the phone
+to the home PC on 3.2.0; screen-off, network transitions and reverse listening
+services remain separate acceptance items. 3.2.1 adds ACL-filtered local IPv4
+ICMP replies, silent incremental UI updates and edge-to-edge window painting
+with safe content insets. See [VPN Alpha and testing](docs/vpn-alpha.md) and
+[3.2.1 fixes and verification](docs/vpn-3.2.1.md).
 
 The opt-in diagnostic remains available separately: a temporary vNIC with no
 routes or DNS override, descriptor/protection checks, and automatic cleanup.
@@ -90,7 +94,7 @@ replace device layout/browser/network acceptance. Hvigor separately compiles
 the complete ArkUI builders.
 
 The current fixed signed artifact is `dist/hap/tailscale-probe-signed.hap`,
-version **3.2.0**. Its existing device-scoped debug signing materials are outside
+version **3.2.1**. Its existing device-scoped debug signing materials are outside
 the repository; passwords are used transiently, never stored in code or Git.
 
 The `entry` module implements this call chain:
