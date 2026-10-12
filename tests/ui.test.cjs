@@ -120,7 +120,7 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
 test('main VPN toggle hands off discovery, reads independent live state, and OFF retains login', async () => {
   const { ui, calls } = harness(); ui.status = running;
   await ui.setVpn(true);
-  assert.deepEqual(calls.slice(0, 3), ['close', 'vpnStart', 'start']);
+  assert.deepEqual(calls.slice(0, 4), ['status', 'close', 'vpnStart', 'start']);
   assert.equal(ui.vpn.connected, true); assert.equal(ui.vpn.rxPackets, 2);
   assert.equal(ui.vpnNeedsCleanup, false); assert.equal(ui.busy, false);
   assert.ok(ui.vpnTimer !== -1);
@@ -132,7 +132,7 @@ test('main VPN toggle hands off discovery, reads independent live state, and OFF
 });
 test('VPN toggle requires authenticated assigned IPv4 and suppresses duplicate busy actions', async () => {
   for (const status of [loggedOut, { ...running, tailscaleIPs: ['fd7a::1'] }]) {
-    const { ui, calls } = harness(); ui.status = status;
+    const { ui, calls } = harness({ getStatus: async () => JSON.stringify(status) }); ui.status = status;
     await ui.setVpn(true); assert.equal(ui.vpn.connected, false); assert.ok(!calls.includes('vpnStart'));
     assert.match(ui.message, /登录|IPv4/);
   }
@@ -465,12 +465,89 @@ test('VPN OFF preserves account through discovery restart, without login/logout/
   ui.aboutToDisappear();
 });
 
-test('saved account reconnecting cannot start VPN until core is ready', async () => {
+test('VPN ON reads live state instead of rejecting a stale Starting account snapshot', async () => {
   const { ui, calls } = harness(); ui.status = { ...running, backendState: 'Starting' };
   await ui.setVpn(true);
-  assert.ok(!calls.includes('vpnStart'));
+  assert.equal(ui.vpn.connected, true);
+  assert.deepEqual(calls.slice(0, 4), ['status', 'close', 'vpnStart', 'start']);
+  assert.ok(!calls.includes('login'));
+  ui.aboutToDisappear();
+});
+
+test('VPN ON waits for actual readiness before closing discovery, suppressing duplicate taps', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let ready = false;
+  const { ui, calls } = harness({ getStatus: async () => JSON.stringify({ ...running, backendState: ready ? 'Running' : 'Starting' }) });
+  ui.status = { ...running, backendState: 'Starting' };
+  const operation = ui.setVpn(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.busy, true); assert.equal(ui.vpnChanging, true);
+  assert.ok(!calls.includes('close')); assert.ok(!calls.includes('vpnStart'));
+  await ui.setVpn(true);
+  ready = true; t.mock.timers.tick(350);
+  await operation;
+  assert.equal(ui.vpn.connected, true);
+  assert.equal(calls.filter((c) => c === 'vpnStart').length, 1);
+  ui.aboutToDisappear();
+});
+
+test('VPN readiness timeout preserves the account/core and reports last state without cleanup churn', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const saved = { ...running, backendState: 'Stopped' };
+  const { ui, calls } = harness({ getStatus: async () => JSON.stringify(saved) });
+  ui.status = saved;
+  const operation = ui.setVpn(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(30000); await operation;
   assert.equal(model.isAuthenticated(ui.status), true);
-  assert.match(ui.message, /重新连接/);
+  assert.equal(ui.vpn.connected, false); assert.equal(ui.vpn.ok, true);
+  assert.equal(ui.vpnNeedsCleanup, false); assert.equal(ui.busy, false);
+  assert.match(ui.message, /超时.*Stopped/);
+  assert.ok(!calls.includes('close')); assert.ok(!calls.includes('start')); assert.ok(!calls.includes('vpnStart'));
+  ui.aboutToDisappear();
+});
+
+test('VPN preparation uses fresh expiry/IPv4 and never closes the core on preflight failure', async () => {
+  for (const snapshot of [loggedOut, { ...running, tailscaleIPs: ['fd7a::1'] }]) {
+    const { ui, calls } = harness({ getStatus: async () => JSON.stringify(snapshot) }); ui.status = running;
+    await ui.setVpn(true);
+    assert.equal(ui.vpn.connected, false); assert.equal(ui.vpn.ok, true);
+    assert.ok(!calls.includes('close')); assert.ok(!calls.includes('vpnStart'));
+    assert.match(ui.message, /认证|IPv4/);
+    ui.aboutToDisappear();
+  }
+});
+
+test('VPN preparation unmount never hands off the core or applies a late snapshot', async () => {
+  let release;
+  const { ui, calls } = harness({ getStatus: async () => {
+    await new Promise((resolve) => { release = resolve; }); return JSON.stringify(running);
+  } });
+  const saved = { ...running, backendState: 'Starting' }; ui.status = saved;
+  const operation = ui.setVpn(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  ui.aboutToDisappear(); release(); await operation;
+  assert.equal(ui.status, saved);
+  assert.ok(!calls.includes('close')); assert.ok(!calls.includes('vpnStart'));
+  assert.equal(ui.pollTimer, -1); assert.equal(ui.vpnTimer, -1);
+});
+
+test('hung readiness query is bounded and cannot hand off after its late result', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let release;
+  const { ui, calls } = harness({ getStatus: async () => {
+    await new Promise((resolve) => { release = resolve; }); return JSON.stringify(running);
+  } });
+  ui.status = { ...running, backendState: 'Starting' };
+  const operation = ui.setVpn(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(10000); await operation;
+  assert.equal(ui.busy, false); assert.ok(!calls.includes('close')); assert.ok(!calls.includes('vpnStart'));
+  assert.match(ui.message, /读取核心状态超时.*Starting/);
+  assert.ok(!ui.message.includes('cleanup'));
+  release(); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.status.backendState, 'Starting');
+  assert.ok(!calls.includes('vpnStart'));
   ui.aboutToDisappear();
 });
 

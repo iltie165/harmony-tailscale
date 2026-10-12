@@ -180,9 +180,40 @@ struct Index {
     this.restoreDeadline = Date.now() + 15000;
   }
 
+  private async waitForVpnReady(): Promise<string> {
+    const deadline = Date.now() + 30000;
+    let state = this.status.backendState || 'unknown';
+    while (this.mounted && Date.now() < deadline) {
+      this.progress = `正在准备 VPN，等待核心连接（${state}，最多 30 秒）…`;
+      // A read timeout occurs before acquiring any VPN resource. Do not label
+      // it as unverified VPN cleanup or act on a late native result.
+      const raw = await new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`读取核心状态超时（${state}）。尚未启动 VPN，现有核心和账号已保留。`));
+        }, Math.min(10000, deadline - Date.now()));
+        tailscale.getStatus().then((value: string) => { clearTimeout(timer); resolve(value); },
+          (error: Error) => { clearTimeout(timer); reject(error); });
+      });
+      if (!this.mounted) { throw new Error('VPN 开启已取消'); }
+      const result = readControl(raw);
+      this.applyStatus(result);
+      state = result.backendState || 'unknown';
+      if (!isAuthenticated(result)) { throw new Error(`账号需要重新认证（${state}），请先完成登录`); }
+      if (state === 'Running') {
+        const ipv4 = result.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip));
+        if (!ipv4) { throw new Error('未取得本机 Tailnet IPv4，请刷新后重试'); }
+        return ipv4;
+      }
+      await new Promise<void>((resolve) => { setTimeout(resolve, Math.min(350, deadline - Date.now())); });
+    }
+    if (!this.mounted) { throw new Error('VPN 开启已取消'); }
+    throw new Error(`等待核心连接超时（${state}）。尚未启动 VPN，账号已保留；请检查网络或查看核心状态。`);
+  }
+
   private async setVpn(enabled: boolean): Promise<void> {
     if (this.busy || this.vpnChanging || (enabled === this.vpnRunning() && !this.vpnNeedsCleanup)) { return; }
     this.busy = true; this.vpnChanging = true; this.message = '';
+    let handedOff: boolean = false;
     try {
       if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
       if (!this.mounted) { return; }
@@ -190,11 +221,11 @@ struct Index {
       if (enabled) {
         if (this.vpnNeedsCleanup) { throw new Error('请先关闭 VPN，完成上一次清理'); }
         if (!isAuthenticated(this.status) || !this.appContext) { throw new Error('请先完成登录'); }
-        if (this.status.backendState !== 'Running') { throw new Error('账号已保留，正在重新连接，请稍后开启 VPN'); }
-        const ipv4 = this.status.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip));
-        if (!ipv4) { throw new Error('未取得本机 Tailnet IPv4，请刷新后重试'); }
+        const ipv4 = await this.waitForVpnReady();
+        if (!this.mounted) { return; }
         this.progress = '正在将核心交给 VPN 服务…';
         readControl(await tailscale.close());
+        handedOff = true;
         const id = `${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
         this.vpnRequestId = id;
         this.vpnNeedsCleanup = true;
@@ -217,14 +248,16 @@ struct Index {
     } catch (error) {
       if (this.mounted) {
         if (error instanceof VpnSessionError) { this.vpnNeedsCleanup = !error.cleanupConfirmed; }
-        this.vpn.ok = false; this.vpn.state = 'error'; this.vpn.error = `${error}`;
+        if (!enabled || handedOff || this.vpnNeedsCleanup) {
+          this.vpn.ok = false; this.vpn.state = 'error'; this.vpn.error = `${error}`;
+        }
         this.message = `VPN 操作失败：${error}`;
         // Startup denial/failure must not make normal account operations
         // unusable. The lease prevents reopening while cleanup is unfinished.
-        if (!this.vpnNeedsCleanup) {
+        if (!this.vpnNeedsCleanup && handedOff) {
           try { readControl(await tailscale.close()); readControl(await tailscale.start(this.dataDir, this.hostname)); }
           catch (restoreError) { this.message += `；核心恢复：${restoreError}`; }
-        } else { this.message += '；尚未确认关闭，请再次关闭开关，或在系统 VPN 设置中断开。'; }
+        } else if (this.vpnNeedsCleanup) { this.message += '；尚未确认关闭，请再次关闭开关，或在系统 VPN 设置中断开。'; }
       }
     } finally { this.busy = false; this.vpnChanging = false; this.scheduleLoginRefresh(); this.scheduleVpnRefresh(); }
   }
