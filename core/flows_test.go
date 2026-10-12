@@ -42,6 +42,8 @@ func (w *fakeWatcher) Next() (ipn.Notify, error) {
 func (w *fakeWatcher) Close() error { w.closed++; return nil }
 
 type fakeClient struct {
+	prefs                                            *ipn.Prefs
+	prefsErr                                         error
 	status                                           *ipnstate.Status
 	statusErr, watchErr, startErr, logoutErr         error
 	snapshotErr                                      error
@@ -50,6 +52,8 @@ type fakeClient struct {
 	order                                            []string
 	snapshotCtx                                      context.Context
 }
+
+func (c *fakeClient) GetPrefs(context.Context) (*ipn.Prefs, error) { return c.prefs, c.prefsErr }
 
 func (c *fakeClient) Status(ctx context.Context) (*ipnstate.Status, error) {
 	c.statusCalls++

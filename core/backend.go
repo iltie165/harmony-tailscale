@@ -19,6 +19,7 @@ type loginWatcher interface {
 }
 type controlClient interface {
 	Status(context.Context) (*ipnstate.Status, error)
+	GetPrefs(context.Context) (*ipn.Prefs, error)
 	WatchIPNBus(context.Context, ipn.NotifyWatchOpt) (loginWatcher, error)
 	StartLoginInteractive(context.Context) error
 	Logout(context.Context) error

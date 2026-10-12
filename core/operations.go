@@ -190,5 +190,18 @@ func fetchControlStatus(operation string) controlStatusResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	status, err := client.Status(ctx)
-	return controlStatus(operation, state, status, err)
+	result := controlStatus(operation, state, status, err)
+	if !result.OK || result.LoggedIn {
+		return result
+	}
+	switch result.BackendState {
+	case "NoState", "Starting", "Stopped":
+		prefs, prefsErr := client.GetPrefs(ctx)
+		if prefsErr != nil {
+			return controlStatus(operation, state, nil, fmt.Errorf("read account state: %w", prefsErr))
+		}
+		return restoreAccountStatus(result, prefs)
+	default:
+		return result
+	}
 }

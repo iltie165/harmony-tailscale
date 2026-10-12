@@ -12,7 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/persist"
 )
 
 func TestJSONErrorEncoding(t *testing.T) {
@@ -102,8 +106,9 @@ func TestWriteUIContracts(t *testing.T) {
 	setupBackend(t, b)
 	startCore(t.TempDir(), "host")
 	cases := map[string]any{
-		"running": controlStatus("status", "started", s, nil),
-		"peers":   onlinePeersCore(""), "emptyPeers": onlinePeersCore("missing"),
+		"running":   controlStatus("status", "started", s, nil),
+		"restoring": restoreAccountStatus(controlStatus("status", "started", &ipnstate.Status{BackendState: "Starting"}, nil), savedTestPrefs()),
+		"peers":     onlinePeersCore(""), "emptyPeers": onlinePeersCore("missing"),
 		"statusFailure": controlStatus("status", "started", nil, errors.New("control unavailable")),
 		"groupFailure":  onlinePeersCore("group:dev"),
 		"started":       stateResult("start"), "closed": closeCore(),
@@ -112,6 +117,72 @@ func TestWriteUIContracts(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, name+".json"), encodeJSON(result), 0644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func savedTestPrefs() *ipn.Prefs {
+	p := ipn.NewPrefs()
+	p.Hostname = "saved-phone"
+	p.Persist = &persist.Persist{NodeID: "test-node", PrivateNodeKey: key.NewNode(), UserProfile: tailcfg.UserProfile{ID: 1, LoginName: "saved@example.com", DisplayName: "Saved account"}}
+	return p
+}
+
+func TestAccountStatusDuringBackendRestart(t *testing.T) {
+	for _, state := range []string{"Starting", "Stopped", "NoState", "NeedsLogin", "NeedsMachineAuth", "Running"} {
+		t.Run(state, func(t *testing.T) {
+			c := loginClient()
+			c.status.BackendState = state
+			c.prefs = savedTestPrefs()
+			setupBackend(t, &fakeBackend{client: c})
+			startCore(t.TempDir(), "host")
+			r := fetchControlStatus("status")
+			want := state != "NeedsLogin" && state != "NeedsMachineAuth"
+			if !r.OK || r.LoggedIn != want {
+				t.Fatalf("account state: %+v", r)
+			}
+			if want && state != "Running" && (r.Self == nil || r.Self.UserLogin != "saved@example.com") {
+				t.Fatal("lost saved account name")
+			}
+			keyText, _ := c.prefs.Persist.PrivateNodeKey.MarshalText()
+			if strings.Contains(string(encodeJSON(r)), string(keyText)) {
+				t.Fatal("exported node key")
+			}
+		})
+	}
+}
+
+func TestAccountRestoreFailsClosed(t *testing.T) {
+	for _, fault := range []string{"missing", "emptyPersist", "unregistered", "loggedOut", "prefsError", "existingSelf", "sanitizedKeys"} {
+		t.Run(fault, func(t *testing.T) {
+			c := loginClient()
+			c.status.BackendState = "Starting"
+			c.prefs = savedTestPrefs()
+			switch fault {
+			case "missing":
+				c.prefs = nil
+			case "emptyPersist":
+				c.prefs.Persist = nil
+			case "unregistered":
+				c.prefs.Persist.NodeID = ""
+			case "sanitizedKeys":
+				c.prefs.Persist.PrivateNodeKey = key.NodePrivate{}
+			case "loggedOut":
+				c.prefs.LoggedOut = true
+			case "prefsError":
+				c.prefsErr = errors.New("prefs denied")
+			case "existingSelf":
+				c.status.Self = &ipnstate.PeerStatus{HostName: "current"}
+			}
+			setupBackend(t, &fakeBackend{client: c})
+			startCore(t.TempDir(), "host")
+			r := fetchControlStatus("status")
+			if r.LoggedIn != (fault == "existingSelf" || fault == "sanitizedKeys") || r.OK != (fault != "prefsError") {
+				t.Fatalf("%+v", r)
+			}
+			if fault == "existingSelf" && r.Self.HostName != "current" {
+				t.Fatal("overwrote live identity")
+			}
+		})
 	}
 }
 

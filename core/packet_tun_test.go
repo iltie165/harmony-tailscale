@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
@@ -530,6 +532,90 @@ func TestRealVPNBackendStartupControlAndCleanup(t *testing.T) {
 		t.Fatal("core took ownership of ArkTS descriptor", err)
 	}
 	tun.Close()
+}
+
+// Real official profile storage + both production backends. No control plane:
+// the stored account must remain visible even when no netmap can arrive.
+func TestSavedAccountSurvivesVPNOffAndColdRestart(t *testing.T) {
+	productionFactory := newBackend
+	setupBackend(t, &fakeBackend{})
+	dir := t.TempDir()
+	prefs := savedTestPrefs()
+	prefs.ControlURL = "http://127.0.0.1:1"
+	profile := &ipn.LoginProfile{ID: "test", Key: "profile-test", Name: "Saved", UserProfile: prefs.Persist.UserProfile, ControlURL: prefs.ControlURL}
+	s, err := store.New(logger.Discard, filepath.Join(dir, "tailscaled.state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[ipn.StateKey][]byte{
+		ipn.KnownProfilesStateKey:  encodeJSON(map[ipn.ProfileID]*ipn.LoginProfile{profile.ID: profile}),
+		ipn.CurrentProfileStateKey: []byte(profile.Key), profile.Key: encodeJSON(prefs),
+	} {
+		if err := s.WriteState(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, fd, _ := socketTun(t)
+	b := &serviceBackend{dir: dir, hostname: "saved-phone", address: "100.64.1.1"}
+	b.tun, err = newPacketTun(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	before, err := b.client.GetPrefs(ctx)
+	if err != nil || before.Persist == nil || before.Persist.NodeID != prefs.Persist.NodeID {
+		t.Fatal("VPN failed to retain credentials", err)
+	}
+	if err = b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		// Use the actual production factory, including the lease and tsnet.
+		backend := productionFactory(dir, "saved-phone")
+		if err = backend.Start(); err != nil {
+			t.Fatal(err)
+		}
+		client, err := backend.LocalClient()
+		if err != nil {
+			backend.Close()
+			t.Fatal(err)
+		}
+		after, err := client.GetPrefs(ctx)
+		if err != nil || after.LoggedOut || after.Persist == nil || after.Persist.NodeID != prefs.Persist.NodeID {
+			backend.Close()
+			t.Fatal("OFF/relaunch deleted login", err)
+		}
+		status, err := client.Status(ctx)
+		result := restoreAccountStatus(controlStatus("status", "started", status, err), after)
+		if !result.OK || !result.LoggedIn {
+			backend.Close()
+			t.Fatal("offline saved account appeared logged out", result)
+		}
+		if err = backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := store.New(logger.Discard, filepath.Join(dir, "tailscaled.state"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := stored.ReadState(ipn.CurrentProfileStateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := stored.ReadState(ipn.StateKey(current))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved ipn.Prefs
+		if err := json.Unmarshal(data, &saved); err != nil || saved.Persist == nil || !saved.Persist.PrivateNodeKey.Equal(prefs.Persist.PrivateNodeKey) {
+			t.Fatal("OFF/relaunch altered stored node credentials", err)
+		}
+	}
 }
 func TestVPNStartupValidationAndOccupiedLifecycle(t *testing.T) {
 	b := &fakeBackend{}

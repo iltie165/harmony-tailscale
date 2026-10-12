@@ -1,6 +1,7 @@
 # VPN Alpha — 3.2.0
 
-Latest maintenance release: [3.2.1 ICMP/UI fixes](vpn-3.2.1.md). On 2026-10-12
+Latest maintenance release: [3.2.2 account restoration](vpn-3.2.2.md), following
+[3.2.1 ICMP/UI fixes](vpn-3.2.1.md). On 2026-10-12
 the user confirmed phone-to-home-PC Moonlight streaming works with the system
 VPN. The original release evidence below remains historical; reverse ping and
 the new rendering changes have separate phone acceptance steps.

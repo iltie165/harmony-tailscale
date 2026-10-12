@@ -245,9 +245,12 @@ test('a pending SDK start times out with a visible stage and releases the UI', a
   assert.deepEqual(probeCalls, ['stop']);
 });
 
-test('dashboard requires a successful, Running, authenticated backend response', () => {
+test('dashboard uses account authentication independently of engine readiness', () => {
   assert.equal(model.isAuthenticated(running), true);
-  for (const bad of [loggedOut, {}, { ...running, ok: false }, { ...running, backendState: 'Stopped' }, { ...running, loggedIn: false }]) {
+  for (const state of ['Starting', 'Stopped', 'NoState']) {
+    assert.equal(model.isAuthenticated({ ...running, backendState: state }), true);
+  }
+  for (const bad of [loggedOut, {}, { ...running, ok: false }, { ...running, backendState: 'NeedsLogin' }, { ...running, loggedIn: false }]) {
     assert.equal(model.isAuthenticated(bad), false);
   }
 });
@@ -405,12 +408,81 @@ test('Go-produced status/peer/lifecycle fixtures obey the actual UI decoder cont
   }
   const fixture = (name) => fs.readFileSync(path.join(dir, `${name}.json`), 'utf8');
   assert.equal(model.isAuthenticated(model.readControl(fixture('running'))), true);
+  assert.equal(model.isAuthenticated(model.readControl(fixture('restoring'))), true);
   assert.equal(model.readPeers(fixture('peers')).length, 2);
   assert.equal(model.readPeers(fixture('emptyPeers')).length, 0);
   assert.equal(model.readControl(fixture('started')).state, 'started');
   assert.equal(model.readControl(fixture('closed')).state, 'closed');
   assert.throws(() => model.readControl(fixture('statusFailure')), /control unavailable/);
   assert.throws(() => model.readPeers(fixture('groupFailure')), /ACL group/);
+});
+
+test('cold launch restores saved account before Running and silently continues after startup window', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let ready = false;
+  const { ui, calls } = harness({ getStatus: async () => JSON.stringify({ ...running, backendState: ready ? 'Running' : 'Starting' }) });
+  await ui.restoreSession();
+  assert.equal(ui.restoringSession, false);
+  assert.equal(model.isAuthenticated(ui.status), true);
+  assert.equal(ui.vpn.connected, false);
+  assert.equal(ui.peers.length, 0);
+  assert.ok(!calls.includes('login'));
+  assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === 'peers'));
+  t.mock.timers.tick(16000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(model.isAuthenticated(ui.status), true);
+  assert.notEqual(ui.vpnTimer, -1);
+  ready = true;
+  t.mock.timers.tick(5000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.peers.length, 1);
+  assert.equal(ui.busy, false);
+  assert.equal(ui.vpnTimer, -1);
+  ui.aboutToDisappear();
+});
+
+test('VPN OFF preserves account through discovery restart, without login/logout/browser', async () => {
+  let restarting = false;
+  const { ui, calls } = harness({
+    getStatus: async () => JSON.stringify({ ...running, backendState: restarting ? 'Starting' : 'Running' }),
+    logout: async () => { throw new Error('OFF must never log out'); }
+  });
+  ui.status = running;
+  await ui.setVpn(true);
+  restarting = true;
+  await ui.setVpn(false);
+  assert.equal(ui.vpn.connected, false);
+  assert.equal(model.isAuthenticated(ui.status), true);
+  assert.equal(ui.peers.length, 0);
+  assert.notEqual(ui.pollTimer, -1);
+  assert.match(ui.message, /登录已保留/);
+  assert.ok(!calls.includes('login'));
+  assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === 'browser'));
+  restarting = false;
+  await ui.refreshData(true);
+  assert.equal(ui.peers.length, 1);
+  assert.equal(ui.pollTimer, -1);
+  ui.aboutToDisappear();
+});
+
+test('saved account reconnecting cannot start VPN until core is ready', async () => {
+  const { ui, calls } = harness(); ui.status = { ...running, backendState: 'Starting' };
+  await ui.setVpn(true);
+  assert.ok(!calls.includes('vpnStart'));
+  assert.equal(model.isAuthenticated(ui.status), true);
+  assert.match(ui.message, /重新连接/);
+  ui.aboutToDisappear();
+});
+
+test('expired authentication and explicit logout still return to signed-out state', async () => {
+  const { ui } = harness({ getStatus: async () => JSON.stringify(loggedOut) });
+  ui.status = { ...running, backendState: 'Starting' };
+  await ui.refreshData(true);
+  assert.equal(model.isAuthenticated(ui.status), false);
+  ui.status = { ...running, backendState: 'Stopped' };
+  await ui.logout();
+  assert.equal(model.isAuthenticated(ui.status), false);
+  ui.aboutToDisappear();
 });
 test('malformed native field types are rejected before rendering or browser dispatch', () => {
   for (const result of [

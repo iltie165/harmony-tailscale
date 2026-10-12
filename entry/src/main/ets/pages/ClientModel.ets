@@ -67,7 +67,9 @@ export function readPeers(raw: string): PeerInfo[] {
   return result.peers.filter((peer: PeerInfo) => peer.online === true);
 }
 export function isAuthenticated(status: ControlResult): boolean {
-  return status.ok === true && status.loggedIn === true && status.backendState === 'Running';
+  return status.ok === true && status.loggedIn === true &&
+    (status.backendState === 'Running' || status.backendState === 'Starting' ||
+      status.backendState === 'Stopped' || status.backendState === 'NoState');
 }
 export function accountName(status: ControlResult): string {
   return status.self?.userLogin || status.self?.userName || 'Tailscale 账号';

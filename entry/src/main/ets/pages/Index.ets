@@ -34,6 +34,7 @@ struct Index {
   @State private showFilter: boolean = false;
   @State private lastUpdated: string = '';
   @State private awaitingLogin: boolean = false;
+  @State private restoringSession: boolean = true;
   @State private vpn: VpnState = new VpnState();
   @State private vpnChanging: boolean = false;
   @State private vpnNeedsCleanup: boolean = false;
@@ -106,7 +107,7 @@ struct Index {
       this.selectedPeer = undefined;
       this.lastUpdated = '';
       if (this.page === 'detail') { this.page = 'main'; }
-    } else {
+    } else if (result.backendState === 'Running') {
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
       this.stopPolling();
@@ -129,7 +130,7 @@ struct Index {
     if (!this.mounted) { return; }
     if (!silent) { this.output = safeOutput(raw); }
     this.applyStatus(readControl(raw));
-    if (isAuthenticated(this.status)) {
+    if (isAuthenticated(this.status) && this.status.backendState === 'Running') {
       const peerRaw: string = await tailscale.onlinePeers(this.peerFilter.trim());
       if (!this.mounted) { return; }
       if (!silent) { this.output = safeOutput(peerRaw); }
@@ -140,13 +141,17 @@ struct Index {
         if (this.selectedPeer) { this.selectedPeer = nextPeers.find((peer: PeerInfo) => peer.id === this.selectedPeer?.id); }
       }
       if (changed || !silent) { this.lastUpdated = new Date().toLocaleTimeString(); }
+    } else if (isAuthenticated(this.status)) {
+      // An authenticated account can be reconnecting; no stale online claims.
+      this.peers = []; this.selectedPeer = undefined; this.lastUpdated = '';
     }
     this.scheduleVpnRefresh();
   }
 
   private scheduleVpnRefresh(): void {
     if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
-    if (!this.mounted || !this.vpnRunning()) { return; }
+    if (!this.mounted || (!this.vpnRunning() &&
+      !(isAuthenticated(this.status) && this.status.backendState !== 'Running'))) { return; }
     this.vpnTimer = setTimeout(() => {
       this.vpnTimer = -1;
       if (this.foreground && !this.busy) { this.refreshData(true); }
@@ -172,6 +177,7 @@ struct Index {
     readControl(await tailscale.close());
     this.vpn = new VpnState(); this.vpnRequestId = '';
     readControl(await tailscale.start(this.dataDir, this.hostname));
+    this.restoreDeadline = Date.now() + 15000;
   }
 
   private async setVpn(enabled: boolean): Promise<void> {
@@ -184,6 +190,7 @@ struct Index {
       if (enabled) {
         if (this.vpnNeedsCleanup) { throw new Error('请先关闭 VPN，完成上一次清理'); }
         if (!isAuthenticated(this.status) || !this.appContext) { throw new Error('请先完成登录'); }
+        if (this.status.backendState !== 'Running') { throw new Error('账号已保留，正在重新连接，请稍后开启 VPN'); }
         const ipv4 = this.status.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip));
         if (!ipv4) { throw new Error('未取得本机 Tailnet IPv4，请刷新后重试'); }
         this.progress = '正在将核心交给 VPN 服务…';
@@ -219,10 +226,11 @@ struct Index {
           catch (restoreError) { this.message += `；核心恢复：${restoreError}`; }
         } else { this.message += '；尚未确认关闭，请再次关闭开关，或在系统 VPN 设置中断开。'; }
       }
-    } finally { this.busy = false; this.vpnChanging = false; this.scheduleVpnRefresh(); }
+    } finally { this.busy = false; this.vpnChanging = false; this.scheduleLoginRefresh(); this.scheduleVpnRefresh(); }
   }
 
   private async restoreSession(): Promise<void> {
+    this.restoringSession = true;
     this.busy = true;
     this.restoreDeadline = Date.now() + 15000;
     this.progress = '正在恢复登录状态…';
@@ -233,7 +241,7 @@ struct Index {
     } catch (error) {
       this.restoreDeadline = 0;
       this.message = `恢复状态失败：${error}`;
-    } finally { this.busy = false; this.scheduleLoginRefresh(); }
+    } finally { this.restoringSession = false; this.busy = false; this.scheduleLoginRefresh(); }
   }
 
   private async refreshData(silent: boolean = false): Promise<void> {
@@ -581,6 +589,10 @@ struct Index {
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
       .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
     this.notice()
+    if (this.status.backendState !== 'Running') {
+      Text('账号已保留，正在重新连接并同步设备…').fontSize(13).fontColor(MUTED)
+        .width('100%').margin({ bottom: 16 })
+    }
     if (this.status.health && this.status.health.length > 0) {
       Text(this.status.health.join('\n')).fontSize(12).fontColor('#966010')
         .width('100%').padding(14).backgroundColor('#FFF4DE').borderRadius(16).margin({ bottom: 16 })
@@ -726,6 +738,12 @@ struct Index {
         if (this.page === 'settings') { this.settings() }
         else if (this.page === 'diagnostics') { this.diagnostics() }
         else if (this.page === 'detail') { this.detail() }
+        else if (this.restoringSession) {
+          Column({ space: 16 }) {
+            LoadingProgress().width(36).height(36).color(BLUE)
+            Text('正在恢复账号…').fontSize(15).fontColor(MUTED)
+          }.width('100%').padding({ top: 100, bottom: 100 })
+        }
         else if (isAuthenticated(this.status)) { this.dashboard() }
         else { this.welcome() }
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })

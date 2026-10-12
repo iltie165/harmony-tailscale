@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
 
@@ -66,6 +67,22 @@ func controlStatus(operation, lifecycleState string, status *ipnstate.Status, er
 			MagicDNSSuffix:  status.CurrentTailnet.MagicDNSSuffix,
 			MagicDNSEnabled: status.CurrentTailnet.MagicDNSEnabled,
 		}
+	}
+	return result
+}
+
+// Authentication survives engine restarts and VPN OFF. Read official prefs,
+// not a UI boolean or the mere presence of a state file. Never export keys.
+func restoreAccountStatus(result controlStatusResult, prefs *ipn.Prefs) controlStatusResult {
+	// LocalAPI deliberately strips private keys. A saved server-assigned NodeID
+	// survives that sanitization; an unregistered generated key does not suffice.
+	if prefs == nil || prefs.LoggedOut || prefs.Persist == nil || prefs.Persist.NodeID == "" {
+		return result
+	}
+	result.LoggedIn = true
+	if result.Self == nil {
+		result.Self = &peerInfo{UserLogin: prefs.Persist.UserProfile.LoginName,
+			UserName: prefs.Persist.UserProfile.DisplayName, HostName: prefs.Hostname}
 	}
 	return result
 }
