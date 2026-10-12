@@ -1,5 +1,5 @@
 import { fileIo } from '@kit.CoreFileKit';
-import { ServiceCommand, ServiceSnapshot, readServiceCommand, readServiceSnapshot } from './NetworkServiceModel';
+import { ServiceCommand, ServiceSnapshot, ServiceStartRequest, readServiceCommand, readServiceSnapshot, readServiceStartRequest } from './NetworkServiceModel';
 import { VpnIntent, readVpnIntent } from './VpnRecoveryModel';
 
 function atomic(path: string, value: string): void {
@@ -11,10 +11,12 @@ export class NetworkServiceStore {
   private snapshotPath: string;
   private commandPath: string;
   private intentPath: string;
+  private startPath: string;
   constructor(dir: string) {
     this.snapshotPath = `${dir}/network-service.json`;
     this.commandPath = `${dir}/network-service-command.json`;
     this.intentPath = `${dir}/vpn-intent.json`;
+    this.startPath = `${dir}/network-service-start.json`;
   }
   read(): ServiceSnapshot | undefined {
     if (!fileIo.accessSync(this.snapshotPath)) { return undefined; }
@@ -31,4 +33,17 @@ export class NetworkServiceStore {
     return fileIo.accessSync(this.intentPath) ? readVpnIntent(fileIo.readTextSync(this.intentPath)) : undefined;
   }
   saveIntent(value: VpnIntent): void { atomic(this.intentPath,JSON.stringify(value)); }
+  saveStart(value: ServiceStartRequest): void { atomic(this.startPath,JSON.stringify(readServiceStartRequest(JSON.stringify(value)))); }
+  pendingStart(): ServiceStartRequest | undefined {
+    if (!fileIo.accessSync(this.startPath)) { return undefined; }
+    const value = readServiceStartRequest(fileIo.readTextSync(this.startPath));
+    const intent = this.intent();
+    const age = Date.now()-value.timestamp;
+    if (age < -1000 || age > 90000 || !intent?.enabled || intent.revision !== value.intentId) { return undefined; }
+    // An already-consumed request cannot resurrect a stopped extension or
+    // replace an owner. A new explicit ON always generates a new ownerId.
+    const snapshot = this.read();
+    if (snapshot?.ownerId === value.ownerId) { return undefined; }
+    return value;
+  }
 }

@@ -15,6 +15,7 @@ function compile(relative, dependencies) {
 function infoHarness(deviceInfo, configurePlatform = async () => '{"ok":true}') {
   return compile('pages/PlatformInfo', {'@kit.BasicServicesKit':{deviceInfo},'libtailscale_napi.so':{default:{configurePlatform}}});
 }
+const controls=compile('pages/ClientModel',{});
 test('platform info reads the real system version/model without SDK, kernel or unique identifiers', () => {
   const source = {osFullName:'OpenHarmony-6.1.1.120',displayVersion:'product release',productModel:'HUAWEI Mate 70',
     get udid() { throw new Error('must not read UDID'); },get serial() { throw new Error('must not read serial'); }};
@@ -35,7 +36,7 @@ test('owning extension configures real platform metadata before creating the off
     '@kit.NetworkKit':{connection:{createNetConnection:()=>({register:cb=>cb(),on(){}})}},
     '@kit.CoreFileKit':{},'@kit.BasicServicesKit':{},'@kit.PerformanceAnalysisKit':{},
     'libtailscale_napi.so':{default:{startService:async()=>{calls.push('start');return '{"ok":true}';}}},
-    './NetworkServiceModel':{},'./VpnRecoveryModel':{},'./NetworkEnvironment':{},
+    './NetworkServiceModel':{},'../pages/ClientModel':controls,'./VpnRecoveryModel':{},'./NetworkEnvironment':{},
     './NetworkServiceStore':{NetworkServiceStore:class {read(){}}},
     './NetworkServiceClient':{serviceDeadline:promise=>promise},'../pages/PlatformInfo':platformInfo
   });

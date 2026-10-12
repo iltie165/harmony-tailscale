@@ -10,6 +10,7 @@ import { PlatformVpnSession } from './VpnSessionPlatform';
 import { publishSession } from './VpnSessionStore';
 import { NetworkServiceActor } from './NetworkServiceModel';
 import { PlatformNetworkService } from './NetworkServicePlatform';
+import { NetworkServiceStore } from './NetworkServiceStore';
 
 class PlatformVpnProbePort implements VpnProbePort {
   private connection: vpnExtension.VpnConnection;
@@ -34,6 +35,19 @@ export default class VpnProbeAbility extends VpnExtensionAbility {
   private service: NetworkServiceActor = new NetworkServiceActor();
 
   onCreate(want: Want): void {
+    // SDK: first-consent Want.parameters delivery is supported from API 22.
+    // Authorization creates the extension, but it need not preserve our Want.
+    // Only an unconsumed, current explicit ON may use the private fallback.
+    if (want.parameters?.vpnMode === undefined && want.parameters?.probeRequestId === undefined && want.parameters?.requestId === undefined) {
+      try {
+        const request = new NetworkServiceStore(this.context.filesDir).pendingStart();
+        if (request) {
+          this.runService({bundleName:'com.ezoo.tailscaleprobe',abilityName:'VpnProbeAbility',
+            parameters:{vpnMode:'service',ownerId:request.ownerId,hostname:request.hostname,prepareOnly:true,intentId:request.intentId}});
+          return;
+        }
+      } catch (_error) { hilog.error(0x5453,'TailscaleVPN','Invalid or unavailable pending VPN start request'); }
+    }
     if (want.parameters?.vpnMode === 'service') {
       this.runService(want); return;
     }
@@ -64,6 +78,7 @@ export default class VpnProbeAbility extends VpnExtensionAbility {
       hilog.error(0x5453,'TailscaleVPN','Invalid network service bootstrap');return;
     }
     try {
+      hilog.info(0x5453,'TailscaleVPN','Authorized extension started; awaiting account handoff');
       const port = new PlatformNetworkService(vpnExtension.createVpnConnection(this.context),this.context.filesDir,hostname);
       await this.service.run(port,ownerId,want.parameters?.prepareOnly === true,
         typeof want.parameters?.intentId === 'string' ? want.parameters.intentId : '');

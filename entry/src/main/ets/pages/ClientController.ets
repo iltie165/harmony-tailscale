@@ -18,38 +18,119 @@ import { PlatformNetworkClient } from '../vpn/NetworkClientPlatform';
 import { ServiceSnapshot } from '../vpn/NetworkServiceModel';
 import { VpnRecoverySupervisor, RecoveryReport } from '../vpn/VpnRecoveryModel';
 import { PlatformVpnRecovery } from '../vpn/VpnRecoveryPlatform';
+@Observed
+export class PeerRow {
+  id: string;
+  @Track peer: PeerInfo;
+  constructor(peer: PeerInfo) { this.id=peer.id;this.peer=peer; }
+}
+
+@Observed
 export class ClientView {
-  page: string = 'main';
-  status: ControlResult = {};
-  peers: PeerInfo[] = [];
-  selectedPeer: PeerInfo | undefined = undefined;
-  output: string = '';
-  busy: boolean = false;
-  peersUpdating: boolean = false;
-  peersError: string = '';
-  vpnProgress: string = '';
-  vpnMessage: string = '';
-  diagnosticBusy: boolean = false;
-  progress: string = '';
-  message: string = '';
-  hostname: string = 'harmony-tsnet';
-  peerFilter: string = '';
-  showFilter: boolean = false;
-  lastUpdated: string = '';
-  awaitingLogin: boolean = false;
-  restoringSession: boolean = true;
-  startupPhase: string = 'checking';
-  startupError: string = '';
-  startupBlocking: boolean = true;
-  previewAccount: ControlResult = {};
-  peersStale: boolean = true;
-  corePaused: boolean = false;
-  appVersion: string = 'Alpha';
-  vpn: VpnState = new VpnState();
-  vpnChanging: boolean = false;
-  vpnNeedsCleanup: boolean = false;
-  vpnWanted: boolean = false;
-  recovery: RecoveryReport = new RecoveryReport();
+  @Track page: string = 'main';
+  @Track status: ControlResult = {};
+  @Track peers: PeerInfo[] = [];
+  @Track peerRows: PeerRow[] = [];
+  @Track selectedPeer: PeerInfo | undefined = undefined;
+  @Track output: string = '';
+  @Track busy: boolean = false;
+  @Track peersUpdating: boolean = false;
+  @Track peersError: string = '';
+  @Track vpnProgress: string = '';
+  @Track vpnMessage: string = '';
+  @Track diagnosticBusy: boolean = false;
+  @Track progress: string = '';
+  @Track message: string = '';
+  @Track hostname: string = 'harmony-tsnet';
+  @Track peerFilter: string = '';
+  @Track showFilter: boolean = false;
+  @Track lastUpdated: string = '';
+  @Track lastSynced: string = '';
+  @Track awaitingLogin: boolean = false;
+  @Track loginStage: string = 'idle';
+  @Track restoringSession: boolean = true;
+  @Track startupPhase: string = 'checking';
+  @Track startupError: string = '';
+  @Track startupBlocking: boolean = true;
+  @Track previewAccount: ControlResult = {};
+  @Track peersStale: boolean = true;
+  @Track corePaused: boolean = false;
+  @Track appVersion: string = 'Alpha';
+  @Track vpn: VpnState = new VpnState();
+  @Track vpnConnected: boolean = false;
+  @Track vpnChanging: boolean = false;
+  @Track vpnStopping: boolean = false;
+  @Track vpnNeedsCleanup: boolean = false;
+  @Track vpnWanted: boolean = false;
+  @Track recovery: RecoveryReport = new RecoveryReport();
+  @Track accountAvailable: boolean = false;
+  @Track account: ControlResult = {};
+  @Track connectionLabel: string = '';
+  @Track vpnLabel: string = '';
+  @Track vpnToggleEnabled: boolean = false;
+  @Track vpnRunning: boolean = false;
+  @Track vpnCanRetry: boolean = false;
+  @Track healthMessage: string = '';
+  // Keep the @State object and rows alive. Only changed observed properties
+  // are assigned; equal snapshots do not dirty any ArkUI dependency.
+  apply(next: ClientView): void {
+    if(this.peers !== next.peers){
+      const previous: Map<string,PeerRow> = new Map<string,PeerRow>();
+      this.peerRows.forEach((row:PeerRow)=>{previous.set(row.id,row);});
+      const rows: PeerRow[] = next.peers.map((peer:PeerInfo)=>{
+        const old=previous.get(peer.id);
+        if(old){if(JSON.stringify(old.peer)!==JSON.stringify(peer)){old.peer=peer;}return old;}
+        return new PeerRow(peer);
+      });
+      if(rows.length!==this.peerRows.length||rows.some((row:PeerRow,index:number)=>row!==this.peerRows[index])){
+        this.peerRows=rows;
+      }
+    }
+    if(this.accountAvailable!==next.accountAvailable){this.accountAvailable=next.accountAvailable;}
+    if(this.account!==next.account){this.account=next.account;}
+    if(this.connectionLabel!==next.connectionLabel){this.connectionLabel=next.connectionLabel;}
+    if(this.vpnLabel!==next.vpnLabel){this.vpnLabel=next.vpnLabel;}
+    if(this.vpnToggleEnabled!==next.vpnToggleEnabled){this.vpnToggleEnabled=next.vpnToggleEnabled;}
+    if(this.vpnRunning!==next.vpnRunning){this.vpnRunning=next.vpnRunning;}
+    if(this.vpnCanRetry!==next.vpnCanRetry){this.vpnCanRetry=next.vpnCanRetry;}
+    if(this.healthMessage!==next.healthMessage){this.healthMessage=next.healthMessage;}
+    if(this.page!==next.page){this.page=next.page;}
+    if(this.status!==next.status){this.status=next.status;}
+    if(this.peers!==next.peers){this.peers=next.peers;}
+    if(this.selectedPeer!==next.selectedPeer){this.selectedPeer=next.selectedPeer;}
+    if(this.output!==next.output){this.output=next.output;}
+    if(this.busy!==next.busy){this.busy=next.busy;}
+    if(this.peersUpdating!==next.peersUpdating){this.peersUpdating=next.peersUpdating;}
+    if(this.peersError!==next.peersError){this.peersError=next.peersError;}
+    if(this.vpnProgress!==next.vpnProgress){this.vpnProgress=next.vpnProgress;}
+    if(this.vpnMessage!==next.vpnMessage){this.vpnMessage=next.vpnMessage;}
+    if(this.diagnosticBusy!==next.diagnosticBusy){this.diagnosticBusy=next.diagnosticBusy;}
+    if(this.progress!==next.progress){this.progress=next.progress;}
+    if(this.message!==next.message){this.message=next.message;}
+    if(this.hostname!==next.hostname){this.hostname=next.hostname;}
+    if(this.peerFilter!==next.peerFilter){this.peerFilter=next.peerFilter;}
+    if(this.showFilter!==next.showFilter){this.showFilter=next.showFilter;}
+    if(this.lastUpdated!==next.lastUpdated){this.lastUpdated=next.lastUpdated;}
+    if(this.lastSynced!==next.lastSynced){this.lastSynced=next.lastSynced;}
+    if(this.awaitingLogin!==next.awaitingLogin){this.awaitingLogin=next.awaitingLogin;}
+    if(this.loginStage!==next.loginStage){this.loginStage=next.loginStage;}
+    if(this.restoringSession!==next.restoringSession){this.restoringSession=next.restoringSession;}
+    if(this.startupPhase!==next.startupPhase){this.startupPhase=next.startupPhase;}
+    if(this.startupError!==next.startupError){this.startupError=next.startupError;}
+    if(this.startupBlocking!==next.startupBlocking){this.startupBlocking=next.startupBlocking;}
+    if(this.previewAccount!==next.previewAccount){this.previewAccount=next.previewAccount;}
+    if(this.peersStale!==next.peersStale){this.peersStale=next.peersStale;}
+    if(this.corePaused!==next.corePaused){this.corePaused=next.corePaused;}
+    if(this.appVersion!==next.appVersion){this.appVersion=next.appVersion;}
+    if(this.vpn!==next.vpn){this.vpn=next.vpn;}
+    if(this.vpnConnected!==next.vpnConnected){this.vpnConnected=next.vpnConnected;}
+    if(this.vpnChanging!==next.vpnChanging){this.vpnChanging=next.vpnChanging;}
+    if(this.vpnStopping!==next.vpnStopping){this.vpnStopping=next.vpnStopping;}
+    if(this.vpnNeedsCleanup!==next.vpnNeedsCleanup){this.vpnNeedsCleanup=next.vpnNeedsCleanup;}
+    if(this.vpnWanted!==next.vpnWanted){this.vpnWanted=next.vpnWanted;}
+    if(this.recovery!==next.recovery){this.recovery=next.recovery;}
+  }
+
 }
 
 export class ClientController {
@@ -70,7 +151,9 @@ export class ClientController {
   public peerFilter: string = '';
   public showFilter: boolean = false;
   public lastUpdated: string = '';
+  public lastSynced: string = '';
   public awaitingLogin: boolean = false;
+  public loginStage: string = 'idle';
   public restoringSession: boolean = true;
   public startupPhase: string = 'checking';
   public startupError: string = '';
@@ -91,6 +174,8 @@ export class ClientController {
   private appContext: common.UIAbilityContext | undefined = undefined;
   private pollTimer: number = -1;
   private loginDeadline: number = 0;
+  private loginNotice: string = '';
+  private recoveryNotice: string = '';
   private restoreDeadline: number = 0;
   private foreground: boolean = true;
   private mounted: boolean = false;
@@ -99,11 +184,17 @@ export class ClientController {
   private vpnStopping: boolean = false;
   private accountStarting: boolean = false;
   private refreshTask: Promise<void> | undefined = undefined;
+  private refreshFilter: string = '';
+  private refreshEpoch: number = 0;
+  private refreshAgain: boolean = false;
+  private refreshAgainSilent: boolean = true;
+  private displayedFilter: string = '';
+  private foregroundRecoveryPending: boolean = false;
   private previewStore: SessionPreviewStore | undefined = undefined;
   private persistedPreview: string = '';
   private foregroundCallback = (_event: emitter.EventData): void => {
     this.foreground = true;
-    if (!this.busy && !this.corePaused && (this.hasAccount() || this.awaitingLogin)) { this.recoverForeground(); }
+    if (!this.busy && !this.corePaused && (this.hasAccount() || this.loginStage !== 'idle')) { this.recoverForeground(); }
   };
   private backgroundCallback = (_event: emitter.EventData): void => {
     this.foreground = false; this.stopPolling();
@@ -197,7 +288,8 @@ export class ClientController {
   displayAccount(): ControlResult { return this.previewAccount.self ? this.previewAccount : this.status; }
   private savePreview(): void {
     const snapshot = this.hasAccount() ? previewOf(this.displayAccount(),
-      this.peerFilter.trim() ? [] : this.peers, this.peerFilter.trim() ? '' : this.lastUpdated) : new SessionPreview();
+      this.peerFilter.trim() ? [] : this.peers, this.peerFilter.trim() ? '' : this.lastUpdated,
+      this.peerFilter.trim() ? '' : this.lastSynced) : new SessionPreview();
     const text = JSON.stringify(snapshot);
     if (text === this.persistedPreview || !this.previewStore) { return; }
     try { this.previewStore.write(snapshot); this.persistedPreview = text; }
@@ -205,7 +297,7 @@ export class ClientController {
   }
   private clearAccountPreview(): void {
     this.previewAccount = {}; this.peers = []; this.selectedPeer = undefined;
-    this.lastUpdated = ''; this.peersStale = true;
+    this.lastUpdated = ''; this.lastSynced = ''; this.peersStale = true;
     this.savePreview();
   }
   connectionLabel(): string {
@@ -223,12 +315,25 @@ export class ClientController {
         '网络配置已就绪，正在建立直连或中继通路。' : message);
   }
 
+  private setLoginNotice(message: string): void { this.loginNotice=message;this.message=message; }
+  private clearLoginNotice(): void {
+    if(this.loginNotice && this.message===this.loginNotice){this.message='';}
+    this.loginNotice='';
+  }
+  private setRecoveryNotice(message: string): void { this.recoveryNotice=message;this.message=message; }
+  private clearRecoveryNotice(): void {
+    if(this.recoveryNotice && this.message===this.recoveryNotice){this.message='';}
+    this.recoveryNotice='';
+  }
+
   private scheduleLoginRefresh(): void {
     this.stopPolling();
     if (!this.mounted) { return; }
     if (this.awaitingLogin && Date.now() >= this.loginDeadline) {
       this.awaitingLogin = false;
-      this.message = '尚未确认登录。完成浏览器认证后，点击登录重试。'; this.notify();
+      this.setLoginNotice(this.loginStage === 'approval' ?
+        '设备仍待管理员批准；批准后可点击“检查授权状态”。' :
+        '尚未确认认证完成，可点击“检查登录结果”或重新发起登录。'); this.notify();
       return;
     }
     if (!this.awaitingLogin && Date.now() >= this.restoreDeadline) { return; }
@@ -245,7 +350,10 @@ export class ClientController {
     if (result.backendState === 'NeedsLogin' || result.backendState === 'NeedsMachineAuth') {
       this.completeStartup();
       this.clearAccountPreview();
-      if (result.backendState === 'NeedsMachineAuth') { this.message = '设备需要管理员批准，请在 Tailscale 管理后台完成授权。'; }
+      if (result.backendState === 'NeedsMachineAuth') {
+        this.loginStage='approval';
+        this.setLoginNotice('设备需要管理员批准，请在 Tailscale 管理后台完成授权。');
+      } else if(this.loginStage === 'approval') { this.loginStage='idle';this.awaitingLogin=false;this.clearLoginNotice(); }
       if (this.page === 'detail') { this.page = 'main'; }
     } else if (isAuthenticated(result)) {
       const previous = this.previewAccount.self;
@@ -256,7 +364,7 @@ export class ClientController {
         (previous?.id && current?.id && previous.id !== current.id) ||
         (previousTailnet && currentTailnet && previousTailnet !== currentTailnet)) {
         this.previewAccount = {};
-        this.peers = []; this.selectedPeer = undefined; this.lastUpdated = ''; this.peersStale = true;
+        this.peers = []; this.selectedPeer = undefined; this.lastUpdated = ''; this.lastSynced = ''; this.peersStale = true;
       }
       const nextAccount: ControlResult = { self: result.self || this.previewAccount.self,
         tailnet: result.tailnet || this.previewAccount.tailnet,
@@ -265,6 +373,7 @@ export class ClientController {
       this.savePreview();
     }
     if (isAuthenticated(result)) {
+      this.clearLoginNotice();this.loginDeadline=0;this.loginStage='idle';
       if (result.tailscaleIPs?.some(tailnetIPv4)) { this.completeStartup(); }
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
@@ -310,8 +419,10 @@ export class ClientController {
         this.peers = nextPeers;
         if (this.selectedPeer) { this.selectedPeer = nextPeers.find((peer: PeerInfo) => peer.id === this.selectedPeer?.id) || this.selectedPeer; }
       }
-      if (changed || !silent || this.peersStale) { this.lastUpdated = new Date().toLocaleString(); }
-      this.peersStale = false;
+      const syncedAt = new Date().toLocaleString();
+      if (changed || !this.lastUpdated) { this.lastUpdated = syncedAt; }
+      this.lastSynced = syncedAt;this.displayedFilter=filter;
+      this.peersStale = false;this.peersError='';
       this.savePreview();
     } else if (this.hasAccount()) {
       // Retain explicitly labelled historical data, not a live online claim.
@@ -331,7 +442,7 @@ export class ClientController {
   }
 
   vpnRunning(): boolean {
-    return this.vpn.connected || this.vpnNeedsCleanup || (this.vpn.state === 'connecting' && tailnetIPv4(this.vpn.ipv4));
+    return this.vpn.connected || this.vpnNeedsCleanup || (this.vpn.state==='connecting' && tailnetIPv4(this.vpn.ipv4));
   }
 
   async disconnectVpn(): Promise<void> {
@@ -379,19 +490,26 @@ export class ClientController {
     } finally {
       if(sequence===this.vpnSequence){
         this.vpnChanging=false;this.vpnStopping=false;this.vpnProgress='';
-        if(this.mounted){this.scheduleVpnRefresh();this.notify();this.refreshData(true);}
+        if(this.mounted){
+          this.scheduleVpnRefresh();this.notify();
+          if(this.foregroundRecoveryPending && this.foreground){this.recoverForeground();}
+          else{this.refreshData(true);}
+        }
       }
     }
   }
 
   async restoreSession(): Promise<void> {
     if(this.accountStarting){return;}
+    if(this.vpnChanging || getAccountSession().isTransferring()){
+      this.foregroundRecoveryPending=true;this.restoringSession=false;this.notify();return;
+    }
     if (this.corePaused) { this.restoringSession=false;this.completeStartup();this.notify();return; }
     this.accountStarting=true;this.beginStartup();this.restoringSession=true;
     if (this.appContext) {
       this.previewStore=new SessionPreviewStore(this.appContext.filesDir);
       const saved=this.previewStore.read();
-      if(saved){this.previewAccount=saved.account;this.peers=saved.peers;this.lastUpdated=saved.updatedAt;
+      if(saved){this.previewAccount=saved.account;this.peers=saved.peers;this.lastUpdated=saved.updatedAt;this.lastSynced=saved.syncedAt;
         this.peersStale=true;this.persistedPreview=JSON.stringify(saved);this.notify();}
     }
     let savedState=false;
@@ -404,7 +522,7 @@ export class ClientController {
       await this.ensureAccount();
       if(this.mounted){this.completeStartup();}
     }catch(e){
-      if(this.mounted){this.peersStale=true;this.message=`账号服务恢复失败：${e}`;this.failStartup(this.message);}
+      if(this.mounted){this.peersStale=true;this.setRecoveryNotice(`账号服务恢复失败：${e}`);this.failStartup(this.message);}
     }finally{
       this.accountStarting=false;
       if(this.mounted){this.restoringSession=false;this.scheduleLoginRefresh();this.notify();}
@@ -414,17 +532,44 @@ export class ClientController {
 
   async refreshData(silent: boolean = false): Promise<void> {
     if (!this.mounted || this.corePaused) { return; }
-    if (this.refreshTask) { return; }
-    const epoch=this.dataEpoch;
-    this.peersUpdating=true;this.peersError='';this.notify();
-    this.refreshTask=this.loadData(silent);
-    try{await this.refreshTask;}
-    catch(e){
-      if(this.mounted&&epoch===this.dataEpoch){this.peersError=`设备更新暂未完成：${e}`;this.peersStale=true;}
-    }finally{
-      this.refreshTask=undefined;this.peersUpdating=false;
-      if(this.mounted){this.scheduleLoginRefresh();this.scheduleVpnRefresh();this.notify();}
+    if (getAccountSession().isTransferring()) { this.foregroundRecoveryPending=true;return; }
+    if (this.refreshTask) {
+      if(this.refreshFilter!==this.peerFilter.trim() || this.refreshEpoch!==this.dataEpoch){
+        this.refreshAgain=true;this.refreshAgainSilent=this.refreshAgainSilent&&silent;
+        if(this.refreshFilter!==this.peerFilter.trim()){
+          this.peersStale=true;this.peersError='筛选条件已变更，正在更新结果…';this.notify();
+        }
+      }
+      return this.refreshTask;
     }
+    this.refreshFilter=this.peerFilter.trim();this.refreshEpoch=this.dataEpoch;
+    this.refreshTask=Promise.resolve().then(()=>this.refreshLoop(silent));
+    try{await this.refreshTask;}finally{this.refreshTask=undefined;}
+  }
+  private async refreshLoop(silent: boolean): Promise<void> {
+    do {
+      this.refreshAgain=false;this.refreshAgainSilent=true;
+      this.refreshFilter=this.peerFilter.trim();this.refreshEpoch=this.dataEpoch;
+      const epoch=this.dataEpoch;
+      if(this.displayedFilter!==this.refreshFilter){this.peersStale=true;this.peersError='筛选条件已变更，正在更新结果…';}
+      if(!silent){this.peersUpdating=true;if(this.displayedFilter===this.refreshFilter){this.peersError='';}}
+      this.notify();
+      try{await this.loadData(silent);}
+      catch(e){
+        if(this.mounted&&epoch===this.dataEpoch){this.peersError=`设备更新暂未完成：${e}`;this.peersStale=true;}
+      }finally{this.peersUpdating=false;}
+      silent=this.refreshAgainSilent;
+    }while(this.refreshAgain && this.mounted && !this.corePaused && !getAccountSession().isTransferring());
+    if(this.mounted){this.scheduleLoginRefresh();this.scheduleVpnRefresh();this.notify();}
+  }
+
+  async checkLoginResult(): Promise<void> {
+    if(this.busy || !this.mounted){return;}
+    this.busy=true;this.progress=this.loginStage==='approval'?'正在检查管理员批准状态…':'正在检查登录结果…';
+    this.awaitingLogin=true;this.loginDeadline=Date.now()+120000;this.notify();
+    try{await this.ensureAccount();await this.refreshData();}
+    catch(error){if(this.mounted){this.setLoginNotice(`检查结果暂未完成：${error}`);}}
+    finally{this.busy=false;this.scheduleLoginRefresh();this.notify();}
   }
 
   async openSystemBrowser(url: string): Promise<void> {
@@ -444,7 +589,7 @@ export class ClientController {
   async login(): Promise<void> {
     if (this.busy) { return; }
     this.busy = true;this.dataEpoch++; this.notify();
-    this.message = '';
+    this.clearLoginNotice();this.message = '';this.loginStage='idle';this.awaitingLogin=false;this.stopPolling();
     this.progress = '正在获取安全登录链接…';
     try {
       if (!this.mounted) { return; }
@@ -456,24 +601,34 @@ export class ClientController {
       const result: ControlResult = readControl(raw);
       this.applyStatus(result);
       if (isAuthenticated(result)) { this.refreshData(true); }
+      else if (result.backendState === 'NeedsMachineAuth') {
+        this.awaitingLogin = true;
+        this.loginStage = 'approval';
+        this.loginDeadline = Date.now() + 120000;
+      }
       else if (result.authUrl) {
         this.progress = '正在打开系统浏览器…';
         await this.openSystemBrowser(result.authUrl);
         if (!this.mounted) { return; }
         hilog.info(0x5453, 'TailscaleProbe', 'Official login browser dispatched');
+        if(isAuthenticated(this.status)){this.clearLoginNotice();return;}
         this.awaitingLogin = true;
         this.loginDeadline = Date.now() + 120000;
-        this.message = '请在浏览器中完成认证，返回后将自动更新。';
+        if(this.status.backendState==='NeedsMachineAuth'){this.loginStage='approval';return;}
+        this.loginStage = 'browser';
+        this.setLoginNotice('请在浏览器中完成认证，返回后将自动更新。');
       } else { throw new Error('控制面未返回登录链接，请在设置中查看诊断结果。'); }
-    } catch (error) { this.message = `登录失败：${error}`; }
+    } catch (error) {
+      if(!isAuthenticated(this.status) && this.status.backendState!=='NeedsMachineAuth'){this.setLoginNotice(`登录失败：${error}`);}
+    }
     finally { this.busy = false; this.scheduleLoginRefresh(); this.notify(); }
   }
 
 
 
   cancelLogin(): void {
-    this.awaitingLogin=false;this.loginDeadline=0;this.stopPolling();
-    this.message='已停止等待登录结果，可重新发起登录。';this.notify();
+    this.awaitingLogin=false;this.loginStage='idle';this.loginDeadline=0;this.stopPolling();
+    this.setLoginNotice('已停止等待登录结果，可重新发起登录。');this.notify();
   }
   vpnCanRetry(): boolean {
     return !this.vpnChanging && !this.vpnNeedsCleanup && this.hasAccount() &&
@@ -497,6 +652,7 @@ export class ClientController {
       this.applyStatus(result);
       this.dataEpoch++;this.clearAccountPreview();
       this.awaitingLogin = false;
+      this.loginStage = 'idle';
       this.restoreDeadline = 0;
       this.stopPolling();
       this.page = 'main';
@@ -606,16 +762,15 @@ export class ClientController {
   private networkPort: PlatformNetworkClient | undefined = undefined;
   private networkStarted: boolean = false;
   private async recoverForeground(): Promise<void> {
-    const previousCore = this.vpn.coreId;
+    if(this.vpnChanging || getAccountSession().isTransferring()) { this.foregroundRecoveryPending=true;return; }
+    this.foregroundRecoveryPending=false;
     try {
       await this.ensureAccount();
       if (!this.mounted) { return; }
-      if (previousCore && this.vpn.coreId!==previousCore && !this.vpn.connected) {
-        this.message=this.vpnWanted() ? '网络服务已恢复，正在自动恢复 VPN。' : '网络服务已恢复，VPN 未开启。';
-      }
       await this.refreshData(true);
     } catch(e) {
-      if(this.mounted){this.peersStale=true;this.message=`网络服务恢复失败：${e}`;this.notify();}
+      if(this.vpnChanging || getAccountSession().isTransferring()){this.foregroundRecoveryPending=true;return;}
+      if(this.mounted){this.peersStale=true;this.setRecoveryNotice(`网络服务恢复失败：${e}`);this.notify();}
     }
   }
   private lastView: ClientView | undefined = undefined;
@@ -641,7 +796,9 @@ export class ClientController {
           next.recoveredAt = report.recoveredAt; next.lastRecoveryMs = report.lastRecoveryMs; next.error = report.error;
           this.recovery = next;
           if (report.phase === 'retry_wait' || report.phase === 'blocked') {
-            this.vpn.connected = false;
+            if(this.vpn.connected){
+              const nextVpn=readVpnState(JSON.stringify(this.vpn));nextVpn.connected=false;this.vpn=nextVpn;
+            }
           }
           if(changed && report.phase !== 'off') {
             this.vpnMessage = report.phase === 'connected' ? 'VPN 已开启。' :
@@ -665,11 +822,19 @@ export class ClientController {
     }else{
       this.networkStarted=false;if(this.mounted){this.vpn=live;}
     }
-    if(this.mounted){this.corePaused=false;this.completeStartup();}
+    if(this.mounted){this.corePaused=false;this.completeStartup();this.clearRecoveryNotice();}
   }
   notify(): void {
     if (!this.mounted || !this.observer) { return; }
     const view = new ClientView();
+    view.accountAvailable = this.hasAccount();
+    view.account = this.displayAccount();
+    view.connectionLabel = this.connectionLabel();
+    view.vpnLabel = this.vpnLabel();
+    view.vpnToggleEnabled = this.vpnToggleEnabled();
+    view.vpnRunning = this.vpnRunning();
+    view.vpnCanRetry = this.vpnCanRetry();
+    view.healthMessage = this.displayHealth().join('\n');
     view.page = this.page;
     view.status = this.status;
     view.peers = this.peers;
@@ -687,7 +852,9 @@ export class ClientController {
     view.peerFilter = this.peerFilter;
     view.showFilter = this.showFilter;
     view.lastUpdated = this.lastUpdated;
+    view.lastSynced = this.lastSynced;
     view.awaitingLogin = this.awaitingLogin;
+    view.loginStage = this.loginStage;
     view.restoringSession = this.restoringSession;
     view.startupPhase = this.startupPhase; view.startupError = this.startupError;
     view.startupBlocking = this.startupBlocking();
@@ -696,12 +863,22 @@ export class ClientController {
     view.corePaused = this.corePaused;
     view.appVersion = this.appVersion;
     view.vpn = this.vpn;
-    view.vpnChanging = this.vpnChanging;
+    view.vpnConnected = this.vpn.connected;
+    view.vpnChanging = this.vpnChanging;view.vpnStopping=this.vpnStopping;
     view.vpnNeedsCleanup = this.vpnNeedsCleanup;
     view.vpnWanted = this.vpnWanted(); view.recovery = this.recovery;
 
     const previous = this.lastView;
-    if (previous && previous.page === view.page &&
+    if (previous &&
+      previous.accountAvailable === view.accountAvailable &&
+      previous.account === view.account &&
+      previous.connectionLabel === view.connectionLabel &&
+      previous.vpnLabel === view.vpnLabel &&
+      previous.vpnToggleEnabled === view.vpnToggleEnabled &&
+      previous.vpnRunning === view.vpnRunning &&
+      previous.vpnCanRetry === view.vpnCanRetry &&
+      previous.healthMessage === view.healthMessage &&
+      previous.page === view.page &&
       previous.status === view.status &&
       previous.peers === view.peers &&
       previous.selectedPeer === view.selectedPeer &&
@@ -718,7 +895,9 @@ export class ClientController {
       previous.peerFilter === view.peerFilter &&
       previous.showFilter === view.showFilter &&
       previous.lastUpdated === view.lastUpdated &&
+      previous.lastSynced === view.lastSynced &&
       previous.awaitingLogin === view.awaitingLogin &&
+      previous.loginStage === view.loginStage &&
       previous.restoringSession === view.restoringSession &&
       previous.startupPhase === view.startupPhase && previous.startupError === view.startupError &&
       previous.startupBlocking === view.startupBlocking &&
@@ -727,7 +906,8 @@ export class ClientController {
       previous.corePaused === view.corePaused &&
       previous.appVersion === view.appVersion &&
       previous.vpn === view.vpn &&
-      previous.vpnChanging === view.vpnChanging &&
+      previous.vpnConnected === view.vpnConnected &&
+      previous.vpnChanging === view.vpnChanging && previous.vpnStopping===view.vpnStopping &&
       previous.vpnNeedsCleanup === view.vpnNeedsCleanup && previous.vpnWanted === view.vpnWanted &&
       previous.recovery === view.recovery) { return; }
     this.lastView = view;

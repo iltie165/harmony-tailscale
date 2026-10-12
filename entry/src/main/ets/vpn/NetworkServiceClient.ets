@@ -94,6 +94,9 @@ export class NetworkServiceClient {
     if (this.sdkPending>0) { throw new Error('上一次系统操作仍在处理中'); }
     if(authorize){this.connectDeadline=0;}
     const existing=this.read();
+    if (existing?.phase === 'cleanup_pending' && !existing.serviceReady) {
+      throw new NetworkServiceError(existing.error || '网络服务清理待确认，请先检查系统 VPN 状态',false);
+    }
     if (authorize && existing && existing.phase==='stopped' && existing.detached && existing.destroyed && existing.descriptorClosed && !existing.coreAlive) {
       this.sdkPending++;
       const stop = async (): Promise<void> => { try { await this.port.stop(); } finally { this.sdkPending--; } };
@@ -126,18 +129,32 @@ export class NetworkServiceClient {
     readControl(await this.port.closeProxy());
     this.port.beginHandoff();
     try {
-      progress('请在系统提示中允许 VPN…');
+      progress('正在启动 VPN 服务…');
       this.sdkPending++;
       const newOwnerId = nonce();
-      const start = async (): Promise<void> => { try { await this.port.start(newOwnerId,intentId); } finally { this.sdkPending--; } };
-      await cancellableService(start(),current,60000,'等待系统 VPN 授权');
-      const deadline=Date.now()+30000;this.connectDeadline=deadline;
+      let sdkLease = true;
+      let sdkSettled = false;
+      let sdkError: Error | undefined = undefined;
+      const releaseSdkLease = (): void => { if (sdkLease) { sdkLease=false;this.sdkPending--; } };
+      // startVpnExtensionAbility is not the authorization callback. The
+      // extension may acknowledge onCreate before this Promise settles. Read
+      // the matching generation concurrently, or both hosts can wait forever.
+      const start = async (): Promise<void> => { await this.port.start(newOwnerId,intentId); };
+      start().then(() => { sdkSettled=true;releaseSdkLease(); }, (e: Error) => {
+        sdkError=e;sdkSettled=true;releaseSdkLease();
+      });
+      let deadline=Date.now()+60000;
+      let acknowledged = false;
       let lastConnectionError = '';
       let released = false;
       while (Date.now()<deadline) {
         if (!current()) { throw new Error('VPN 开启已取消'); }
         const s=this.read();
         if (s && s.ownerId===newOwnerId && fresh(s)) {
+          if (!acknowledged) {
+            acknowledged=true;releaseSdkLease();
+            deadline=Date.now()+30000;this.connectDeadline=deadline;
+          }
           if (s.phase==='stopped'||s.phase==='cleanup_pending') { throw new Error(s.error||'网络服务启动未完成'); }
           if (s.phase==='handoff_wait' && !released) {
             progress('正在准备 VPN 服务…');
@@ -153,7 +170,14 @@ export class NetworkServiceClient {
             if (confirmed?.serviceReady) { return confirmed; }
           }
         }
+        // A live matching actor is the authorization/ownership acknowledgment.
+        // Once acknowledged, a late SDK receipt cannot revoke that proof;
+        // stopped/failed actor and live core checks above remain authoritative.
+        if (sdkError && !acknowledged) { throw sdkError as Error; }
         await this.port.delay();
+      }
+      if (!acknowledged) {
+        throw new Error(sdkSettled ? 'VPN 扩展未报告启动状态，启动超时' : '等待系统 VPN 授权超时，扩展尚未报告启动状态');
       }
       throw new Error(`本地 VPN 服务启动超时${lastConnectionError ? `：${lastConnectionError}` : ''}`);
     } finally { this.port.finishHandoff(); }

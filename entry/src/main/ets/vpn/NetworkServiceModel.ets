@@ -7,6 +7,13 @@ export class ServiceBlocked extends Error {
   constructor(reason: string, message: string) { super(message); this.reason = reason; }
 }
 
+// Only platform boot, after a successful native start, may report this.
+// An unconfirmed rollback must not be published as an already-stopped core.
+export class ServiceBootError extends Error {
+  corePending: boolean;
+  constructor(message: string, corePending: boolean) { super(message); this.corePending = corePending; }
+}
+
 export class ServiceCommand {
   version: number = 1;
   ownerId: string = '';
@@ -16,6 +23,23 @@ export class ServiceCommand {
   repair: boolean = false;
   handoff: boolean = false;
   intentId: string = '';
+}
+// First-consent launches on older systems may omit Want.parameters. Keep
+// bootstrap metadata private and bound to the user's current ON revision.
+export class ServiceStartRequest {
+  version: number = 1;
+  ownerId: string = '';
+  hostname: string = '';
+  intentId: string = '';
+  timestamp: number = 0;
+}
+export function readServiceStartRequest(raw: string): ServiceStartRequest {
+  const value = JSON.parse(raw) as ServiceStartRequest;
+  if (!value || value.version !== 1 || typeof value.ownerId !== 'string' || !/^[0-9-]{1,80}$/.test(value.ownerId) ||
+    typeof value.intentId !== 'string' || !/^[0-9-]{1,80}$/.test(value.intentId) ||
+    typeof value.hostname !== 'string' || !value.hostname.trim() || value.hostname.length > 255 || value.hostname.includes('\u0000') ||
+    !Number.isFinite(value.timestamp)) { throw new Error('Invalid network service start request'); }
+  return value;
 }
 export class ServiceSnapshot extends VpnState {
   version: number = 1;
@@ -191,6 +215,7 @@ export class NetworkServiceActor {
       }
       readControl(await port.boot());
       coreTouched = true;
+      s.coreAlive = true; // Keep a successful start pending until close is confirmed, even if status fails.
       const initial = readVpnState(await port.status());
       if (!initial.coreAlive || !initial.coreId || !initial.coreOwner) { throw new Error('Exclusive core ownership could not be confirmed'); }
       ownsCore = true;
@@ -245,12 +270,18 @@ export class NetworkServiceActor {
         }
         await port.delay();
       }
-    } catch (e) { s.ok = false; s.error = `Service startup: ${e}`; }
+    } catch (e) {
+      if (e instanceof ServiceBootError && e.corePending) { coreTouched = true; s.coreAlive = true; }
+      s.ok = false; s.error = `Service startup: ${e}`;
+    }
     finally {
       const priorError = s.error;
       s.desiredEnabled = false; s.stopReason = this.reason;
       if (ownsCore) { try { await this.cleanup(port,s); } catch (_e) {} }
-      try { if (coreTouched) { readControl(await port.closeCore()); } s.coreAlive = false; s.coreOwner = false; }
+      try {
+        if (coreTouched) { readControl(await port.closeCore()); }
+        s.coreAlive = false; s.coreOwner = false; s.networkMapReady = false; s.assignedIPv4 = '';
+      }
       catch (e) { s.error += `; core shutdown: ${e}`; s.ok = false; }
       s.serviceReady = false;
       s.phase = !s.coreAlive && s.detached && s.destroyed && s.descriptorClosed ? 'stopped' : 'cleanup_pending';

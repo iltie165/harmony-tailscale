@@ -330,7 +330,7 @@ test('extension executes actual SDK configuration with no Tailnet/default route 
     'libtailscale_napi.so': { default: { inspectVpnDescriptor: async () => inspected } },
     './VpnProbeModel': model, './VpnProbeStore': store,
     './VpnSessionModel': sessionModel, './VpnSessionPlatform': {}, './VpnSessionStore': {},
-    './NetworkServiceModel': { NetworkServiceActor: class { cancel() {} } }, './NetworkServicePlatform': {}
+    './NetworkServiceModel': { NetworkServiceActor: class { cancel() {} } }, './NetworkServicePlatform': {}, './NetworkServiceStore': {}
   }).default;
   const instance = new ability();
   instance.context = { filesDir: '/private' };

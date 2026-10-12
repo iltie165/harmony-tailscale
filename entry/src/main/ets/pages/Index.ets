@@ -1,5 +1,6 @@
+import { DeviceCard } from './DeviceCard';
 import { common } from '@kit.AbilityKit';
-import { ClientView, ClientController, getClientController } from './ClientController';
+import { ClientView, ClientController, PeerRow, getClientController } from './ClientController';
 import { PeerInfo, accountName, tailnetName, peerName, peerAddress, osLabel } from './ClientModel';
 const BLUE: string = '#086CFA';
 const INK: string = '#142337';
@@ -15,7 +16,7 @@ struct Index {
   private model: ClientController = getClientController();
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    this.model.attach(context,(view: ClientView) => { this.view = view; });
+    this.model.attach(context,(view: ClientView) => { this.view.apply(view); });
   }
   aboutToDisappear(): void { this.model.aboutToDisappear(); }
   onBackPress(): boolean { const result = this.model.onBackPress(); this.model.notify(); return result; }
@@ -100,7 +101,7 @@ struct Index {
       this.feature($r('app.media.shield'), '使用官方账号登录', '通过系统浏览器完成安全认证')
       this.feature($r('app.media.network'), '你的专属连接空间', '按设备标签、用户或名称筛选')
       this.notice()
-      if (this.model.vpnRunning()) {
+      if (this.view.vpnRunning) {
         Button(this.view.vpnNeedsCleanup ? '确认关闭 VPN' : '关闭 VPN')
           .fontColor(BLUE).backgroundColor('#E2F0FF').width('100%').margin({ bottom: 12 })
           .enabled(!this.view.busy).onClick(() => { this.setVpn(false); })
@@ -108,58 +109,38 @@ struct Index {
       Button() {
         Row({ space: 12 }) {
           if (this.view.busy) { LoadingProgress().width(20).height(20).color(Color.White) }
-          Text(this.view.awaitingLogin ? '刷新登录状态' : '登录 Tailscale')
+          Text(this.view.loginStage === 'approval' ? '检查授权状态' : this.view.loginStage === 'browser' ? '检查登录结果' : '登录 Tailscale')
             .fontSize(17).fontWeight(FontWeight.Medium).fontColor(Color.White)
           if (!this.view.busy) { Text('→').fontSize(23).fontColor(Color.White) }
         }.justifyContent(FlexAlign.Center)
       }.height(54).width('100%').borderRadius(27)
         .linearGradient({ angle: 100, colors: [['#20A2F4', 0], [BLUE, 1]] })
         .enabled(!this.view.busy).onClick(() => {
-          if (this.view.awaitingLogin) { this.refreshData(); } else { this.login(); }
+          if (this.view.loginStage !== 'idle') { this.model.checkLoginResult(); } else { this.login(); }
         })
-      if (this.view.awaitingLogin) {
-        Button('取消等待').backgroundColor(Color.Transparent).fontColor(MUTED)
-          .onClick(() => { this.model.cancelLogin(); })
+      if (this.view.loginStage !== 'idle') {
+        if (this.view.awaitingLogin) {
+          Button('取消等待').backgroundColor(Color.Transparent).fontColor(MUTED)
+            .onClick(() => { this.model.cancelLogin(); })
+        }
         Button('重新发起登录').backgroundColor(Color.Transparent).fontColor(BLUE)
           .enabled(!this.view.busy).onClick(() => { this.login(); })
       }
-      Text('登录只认证账号；开启 VPN 时再请求系统授权。').fontSize(11).fontColor('#8C9DAC')
+      Text('登录只认证账号；VPN 可通过首页开关开启。').fontSize(11).fontColor('#8C9DAC')
         .margin({ top: 24, bottom: 12 })
     }.width('100%')
   }
 
   @Builder
-  private peerCard(peer: PeerInfo) {
-    Row({ space: 12 }) {
-      Row() { this.icon(this.peerIcon(peer.os || ''), 26) }
-        .width(48).height(48).backgroundColor('#ECF4FC').borderRadius(16).justifyContent(FlexAlign.Center)
-      Column({ space: 4 }) {
-        Text(peerName(peer)).fontSize(15).fontWeight(FontWeight.Medium).fontColor(INK)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(peer.tailscaleIPs?.[0] || '暂无 IP').fontSize(12).fontColor(MUTED)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(osLabel(peer.os || '')).fontSize(11).fontColor(MUTED)
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Row({ space: 4 }) {
-        Text('').width(6).height(6).backgroundColor(this.view.peersStale ? MUTED : '#16CF74').borderRadius(3)
-        Text(this.view.peersStale ? '待更新' : '在线').fontSize(11).fontColor(this.view.peersStale ? MUTED : '#089A52')
-      }
-      this.icon($r('app.media.chevron_right'), 14)
-    }.width('100%').padding(16).borderRadius(20).backgroundColor(Color.White)
-      .margin({ bottom: 10 }).onClick(() => { this.model.selectedPeer = peer; this.model.notify(); this.model.page = 'detail'; this.model.notify(); })
-      .accessibilityText(`${peerName(peer)}，${osLabel(peer.os || '')}，${this.view.peersStale ? '上次记录' : '在线'}，查看详情`)
-  }
-
-  @Builder
   private dashboard() {
     Row({ space: 12 }) {
-      Text(accountName(this.model.displayAccount()).slice(0, 1).toUpperCase()).fontSize(19).fontColor(BLUE)
+      Text(accountName(this.view.account).slice(0, 1).toUpperCase()).fontSize(19).fontColor(BLUE)
         .fontWeight(FontWeight.Bold).width(44).height(44).textAlign(TextAlign.Center)
         .backgroundColor('#DAEAFF').borderRadius(22)
       Column({ space: 5 }) {
-        Text(accountName(this.model.displayAccount())).fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK)
+        Text(accountName(this.view.account)).fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(tailnetName(this.model.displayAccount())).fontSize(12).fontColor(MUTED)
+        Text(tailnetName(this.view.account)).fontSize(12).fontColor(MUTED)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       Button({ type: ButtonType.Normal }) { this.icon($r('app.media.settings')) }
@@ -168,7 +149,7 @@ struct Index {
     }.width('100%').margin({ bottom: 20 })
     Row({ space: 7 }) {
       Text('').width(7).height(7).backgroundColor(BLUE).borderRadius(4)
-      Text(this.model.connectionLabel())
+      Text(this.view.connectionLabel)
         .fontSize(12).fontColor('#427297')
     }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor('#DEEEFB')
       .borderRadius(20).margin({ bottom: 18 }).alignSelf(ItemAlign.Start)
@@ -177,13 +158,13 @@ struct Index {
         .backgroundColor('#EDF2F6').borderRadius(24).justifyContent(FlexAlign.Center)
       Column({ space: 6 }) {
         Text('VPN').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
-        Text(this.model.vpnLabel()).fontSize(13).fontColor(this.view.vpn.connected ? BLUE : MUTED)
-        Text(this.view.vpn.connected ? `发送 ${this.view.vpn.txPackets} 包 · 接收 ${this.view.vpn.rxPackets} 包` : '仅连接 Tailnet IPv4 · 保留普通上网')
+        Text(this.view.vpnLabel).fontSize(13).fontColor(this.view.vpnConnected ? BLUE : MUTED)
+        Text(this.view.vpnConnected ? `发送 ${this.view.vpn.txPackets} 包 · 接收 ${this.view.vpn.rxPackets} 包` : '仅连接 Tailnet IPv4 · 保留普通上网')
           .fontSize(11).fontColor(MUTED)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: this.view.vpn.connected }).enabled(!this.view.vpnChanging && this.model.vpnToggleEnabled())
+      Toggle({ type: ToggleType.Switch, isOn: this.view.vpnConnected }).enabled(!this.view.vpnChanging && this.view.vpnToggleEnabled)
         .onChange((enabled: boolean) => {
-          if (!this.view.vpnChanging && enabled !== this.view.vpn.connected) { this.setVpn(enabled); }
+          if (!this.view.vpnChanging && enabled !== this.view.vpnConnected) { this.setVpn(enabled); }
         })
         .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })
@@ -191,7 +172,7 @@ struct Index {
       Button('取消连接').fontColor(BLUE).backgroundColor('#E3EFFF')
         .onClick(() => { this.setVpn(false); }).margin({ bottom: 12 })
     }
-    if (this.model.vpnCanRetry()) {
+    if (this.view.vpnCanRetry) {
       Button('重试连接').fontColor(BLUE).backgroundColor('#E3EFFF').onClick(() => { this.setVpn(true); })
     }
     if (this.view.vpnNeedsCleanup) {
@@ -202,7 +183,7 @@ struct Index {
     }
 
     Text(this.view.vpn.networkMapReady ? `本机 IP：${this.view.vpn.assignedIPv4}` :
-      `${this.view.status.backendState === 'Running' && this.view.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.model.displayAccount().tailscaleIPs?.join(' · ') || '暂无'}`)
+      `${this.view.status.backendState === 'Running' && this.view.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.view.account.tailscaleIPs?.join(' · ') || '暂无'}`)
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
       .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
     this.notice()
@@ -215,7 +196,7 @@ struct Index {
         .fontColor(BLUE).backgroundColor('#E3EFFF').margin({ bottom: 16 })
     }
     if (this.view.status.health && this.view.status.health.length > 0) {
-      Text(this.model.displayHealth().join('\n')).fontSize(12).fontColor('#966010')
+      Text(this.view.healthMessage).fontSize(12).fontColor('#966010')
         .width('100%').padding(14).backgroundColor('#FFF4DE').borderRadius(16).margin({ bottom: 16 })
     }
     Row() {
@@ -224,8 +205,13 @@ struct Index {
       Button(this.view.showFilter ? '收起' : '筛选').fontSize(12).fontColor(MUTED)
         .backgroundColor(Color.Transparent).height(40).onClick(() => { this.model.showFilter = !this.view.showFilter; this.model.notify(); })
       Button() {
-        Row({ space: 5 }) { this.icon($r('app.media.refresh'), 16); Text('刷新').fontSize(12).fontColor(BLUE) }
+        Row({ space: 5 }) {
+          if (this.view.peersUpdating) { LoadingProgress().width(16).height(16).color(BLUE) }
+          else { this.icon($r('app.media.refresh'), 16) }
+          Text('刷新').fontSize(12).fontColor(BLUE)
+        }
       }.backgroundColor(Color.Transparent).height(40).enabled(!this.view.peersUpdating).onClick(() => { this.refreshData(); })
+        .accessibilityText(this.view.peersUpdating ? '正在更新设备' : '刷新设备')
     }.width('100%').margin({ bottom: 8 })
     if (this.view.showFilter) {
       TextInput({ text: this.view.peerFilter, placeholder: '名称 / tag:server / user:name' })
@@ -235,20 +221,15 @@ struct Index {
       Text('仅展示当前账号可见的在线设备；不支持 ACL group: 组查询。')
         .fontSize(11).fontColor(MUTED).width('100%').margin({ bottom: 12 })
     }
-    // Stable unchanged rows; a changed row gets a new key so ForEach updates
-    // its non-Observed PeerInfo builder instead of retaining stale text.
-    ForEach(this.view.peers, (peer: PeerInfo) => { this.peerCard(peer) },
-      (peer: PeerInfo) => `${peer.id}:${JSON.stringify(peer)}`)
-    if (this.view.peersUpdating) {
-      Row({ space: 8 }) {
-        LoadingProgress().width(18).height(18).color(BLUE)
-        Text('正在更新设备…').fontSize(12).fontColor(MUTED)
-      }.width('100%').margin({ bottom: 12 })
-    }
+    ForEach(this.view.peerRows, (row: PeerRow) => {
+      DeviceCard({row:row,stale:this.view.peersStale,onSelect:(peer:PeerInfo):void=>{
+        this.model.selectedPeer=peer;this.model.page='detail';this.model.notify();
+      }})
+    }, (row:PeerRow) => row.id)
     if (this.view.peersError) {
       Text(this.view.peersError).fontSize(12).fontColor(MUTED).width('100%').margin({ bottom: 12 })
     }
-    if (this.view.peers.length === 0 && !this.view.peersUpdating) {
+    if (this.view.peers.length === 0) {
       Column({ space: 12 }) {
         this.icon($r('app.media.device_desktop'), 36)
         Text(this.view.peersStale ? '设备信息待更新' : (this.view.peerFilter ? '没有匹配的在线设备' : '暂无可见的在线设备'))
@@ -257,8 +238,8 @@ struct Index {
           .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center)
       }.width('100%').padding(24).backgroundColor(Color.White).borderRadius(20)
     }
-    if (this.view.lastUpdated) {
-      Text(`${this.view.peersStale ? '历史数据 · ' : ''}更新于 ${this.view.lastUpdated}`).fontSize(11).fontColor(MUTED).width('100%')
+    if (this.view.lastSynced) {
+      Text(`${this.view.peersStale ? '历史数据 · ' : ''}最近同步 ${this.view.lastSynced}`).fontSize(11).fontColor(MUTED).width('100%')
         .margin({ top: 8, bottom: 16 })
     }
     Row({ space: 12 }) {
@@ -279,10 +260,10 @@ struct Index {
     this.notice()
     Column({ space: 10 }) {
       Text('账号与网络').fontSize(12).fontColor(MUTED).width('100%')
-      Text(this.model.hasAccount() ? accountName(this.model.displayAccount()) : '未登录')
+      Text(this.view.accountAvailable ? accountName(this.view.account) : '未登录')
         .fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK).width('100%')
-      if (this.model.hasAccount()) {
-        Text(tailnetName(this.model.displayAccount())).fontSize(13).fontColor(MUTED).width('100%')
+      if (this.view.accountAvailable) {
+        Text(tailnetName(this.view.account)).fontSize(13).fontColor(MUTED).width('100%')
       }
       Text('官方 Tailscale 控制面').fontSize(13).fontColor(MUTED).width('100%')
     }.padding(20).width('100%').backgroundColor(Color.White).borderRadius(22).margin({ bottom: 16 })
@@ -368,7 +349,7 @@ struct Index {
         if (this.view.page === 'settings') { this.settings() }
         else if (this.view.page === 'diagnostics') { this.diagnostics() }
         else if (this.view.page === 'detail') { this.detail() }
-        else if (this.model.hasAccount()) { this.dashboard() }
+        else if (this.view.accountAvailable) { this.dashboard() }
         else { this.welcome() }
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })
     }.width('100%').height('100%').scrollBar(BarState.Off)

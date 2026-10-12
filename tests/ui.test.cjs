@@ -15,7 +15,7 @@ function compile(source, name, dependencies = {}) {
   const mod = new Module(path.join(__dirname, name), module);
   mod.filename = path.join(__dirname, name);
   mod.require = (id) => Object.hasOwn(dependencies, id) ? dependencies[id] : require(id);
-  mod._compile(compiled, mod.filename);
+  mod._compile('const Observed = (type) => type; const Track = () => {};\n' + compiled, mod.filename);
   return mod.exports;
 }
 const model = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ClientModel.ets'), 'utf8'), 'model.cjs');
@@ -193,7 +193,7 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     './VpnRecoveryModel':recovery,'./VpnSessionModel':sessionModel,'./NetworkEnvironment':{inspectNetworks:async()=>({online:true,ownVpn:sessionLive,otherVpn:false})}
   });
   const source=fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ClientController.ets'), 'utf8');
-  const { ClientController: Index } = compile(source, 'controller.cjs', {
+  const { ClientController: Index, ClientView, PeerRow } = compile(source, 'controller.cjs', {
     '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter },
     '@kit.CoreFileKit': { fileIo: { accessSync: () => true } },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
@@ -220,7 +220,7 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     openLink: async (url) => { calls.push(['browser', url]); },
     startAbility: async () => { calls.push('fallback'); }
   };
-  return { ui, calls, probeCalls, files, preview, native, accountModule };
+  return { ui, calls, probeCalls, files, preview, native, accountModule, ClientView, PeerRow };
 }
 
 test('a current native map releases startup and enables VPN while account refresh is pending',async t=>{
@@ -1111,4 +1111,189 @@ test('browser authentication observation can be cancelled without starting VPN o
   await ui.login();assert.equal(ui.awaitingLogin,true);
   ui.cancelLogin();assert.equal(ui.awaitingLogin,false);assert.equal(ui.loginDeadline,0);assert.equal(ui.pollTimer,-1);
   assert.ok(!calls.includes('serviceStart'));assert.ok(!calls.includes('vpnStart'));assert.match(ui.message,/停止等待/);
+});
+
+test('authenticated Starting opens the dashboard and clears browser notice before peer readiness', async () => {
+  const {ui,calls}=harness({getStatus:async()=>JSON.stringify({...running,backendState:'Starting'})});
+  await ui.login();assert.match(ui.message,/浏览器/);assert.equal(ui.awaitingLogin,true);
+  await ui.refreshData(true);
+  assert.equal(ui.hasAccount(),true);assert.equal(ui.connectionLabel(),'已登录 · VPN 未开启');
+  assert.equal(ui.message,'');assert.equal(ui.awaitingLogin,false);assert.equal(ui.loginDeadline,0);
+  assert.equal(ui.peersStale,true);assert.equal(ui.peers.length,0);
+  assert.ok(!calls.includes('serviceStart'));assert.ok(!calls.includes('vpnStart'));
+});
+
+test('late browser dispatch cannot restore waiting copy after authentication succeeds', async () => {
+  const {ui}=harness();let dispatched;
+  ui.appContext.openLink=()=>new Promise(resolve=>{dispatched=resolve;});
+  const login=ui.login();
+  for(let i=0;i<30&&!dispatched;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(dispatched);
+  await ui.refreshData(true);assert.equal(ui.hasAccount(),true);
+  dispatched();await login;
+  assert.equal(ui.awaitingLogin,false);assert.equal(ui.message,'');assert.equal(ui.loginDeadline,0);
+});
+
+test('cancelled and expired login notices clear on later confirmation without erasing unrelated diagnostics', async () => {
+  const {ui}=harness();
+  await ui.login();ui.cancelLogin();await ui.refreshData(true);assert.equal(ui.message,'');
+  await ui.login();ui.loginDeadline=Date.now()-1;ui.scheduleLoginRefresh();
+  assert.match(ui.message,/尚未确认认证完成/);assert.equal(ui.awaitingLogin,false);
+  await ui.refreshData(true);assert.equal(ui.message,'');
+  await ui.login();ui.message='保留此诊断结果';await ui.refreshData(true);
+  assert.equal(ui.message,'保留此诊断结果');assert.equal(ui.loginNotice,'');
+});
+
+test('machine approval uses its own prompt and confirmation clears it without opening the browser', async () => {
+  const {ui,calls}=harness({login:async()=>JSON.stringify({ok:true,backendState:'NeedsMachineAuth',loggedIn:false})});
+  await ui.login();assert.match(ui.message,/管理员批准/);assert.equal(ui.awaitingLogin,true);
+  assert.ok(!calls.some(call=>Array.isArray(call)&&call[0]==='browser'));
+  await ui.refreshData(true);assert.equal(ui.message,'');assert.equal(ui.awaitingLogin,false);
+});
+
+test('identical silent polling leaves observers, row identities and update time untouched; manual refresh remains visible', async () => {
+  const {ui,ClientView}=harness();const view=new ClientView();const snapshots=[];
+  ui.observer=next=>{snapshots.push(next);view.apply(next);};
+  await ui.refreshData();const rows=view.peerRows,row=rows[0],updated=view.lastUpdated;
+  snapshots.length=0;
+  for(let i=0;i<3;i++)await ui.refreshData(true);
+  assert.equal(snapshots.length,0);assert.equal(view.peerRows,rows);assert.equal(view.peerRows[0],row);
+  assert.equal(view.lastUpdated,updated);assert.equal(view.peersUpdating,false);
+  await ui.refreshData();assert.ok(snapshots.some(next=>next.peersUpdating));
+  assert.equal(view.peersUpdating,false);assert.equal(view.peerRows[0],row);
+});
+
+test('background peer failure retains the notice during retries and clears it only on success, without loading churn', async () => {
+  let fail=false,release;const {ui}=harness({onlinePeers:async()=>{
+    if(fail)throw new Error('offline');
+    if(release===null)await new Promise(resolve=>{release=resolve;});
+    return JSON.stringify({ok:true,peers:[onlinePeer]});
+  }});
+  const snapshots=[];ui.observer=next=>snapshots.push(next);await ui.refreshData();
+  fail=true;await ui.refreshData(true);assert.match(ui.peersError,/offline/);
+  const error=ui.peersError;snapshots.length=0;fail=false;release=null;
+  const retry=ui.refreshData(true);
+  for(let i=0;i<30&&!release;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(release);
+  assert.equal(ui.peersError,error);assert.equal(ui.peersUpdating,false);
+  assert.equal(snapshots.length,0);release();await retry;
+  assert.equal(ui.peersError,'');assert.equal(ui.peersStale,false);
+  assert.ok(snapshots.every(next=>!next.peersUpdating));
+});
+
+test('observed view keeps row identity across rename, reorder and removal while exposing the latest selected data', () => {
+  const {ClientView}=harness();const view=new ClientView();const next=new ClientView();
+  const second={...onlinePeer,id:'two',hostName:'second'};next.peers=[onlinePeer,second];view.apply(next);
+  const rows=view.peerRows,first=rows[0],other=rows[1];
+  next.peers=[{...onlinePeer,hostName:'renamed'},second];view.apply(next);
+  assert.equal(view.peerRows,rows);assert.equal(view.peerRows[0],first);assert.equal(first.peer.hostName,'renamed');
+  next.peers=[second,first.peer];view.apply(next);
+  assert.deepEqual(view.peerRows,[other,first]);assert.equal(view.peerRows[1].peer,next.peers[1]);
+  next.peers=[first.peer];view.apply(next);assert.equal(view.peerRows[0],first);assert.equal(view.peerRows.length,1);
+});
+
+test('dashboard projections follow authenticated, connecting and stopping states with the retained observed view', () => {
+  const {ui,ClientView}=harness();const view=new ClientView();ui.observer=next=>view.apply(next);
+  ui.notify();assert.equal(view.accountAvailable,false);
+  ui.applyStatus(running);ui.vpn.connected=true;ui.notify();
+  assert.equal(view.accountAvailable,true);assert.equal(view.account,ui.displayAccount());
+  assert.equal(view.connectionLabel,'VPN 已开启');assert.equal(view.vpnLabel,'已开启');
+  assert.equal(view.vpnToggleEnabled,true);ui.vpnStopping=true;ui.notify();assert.equal(view.vpnToggleEnabled,false);
+  ui.vpnStopping=false;ui.vpn.connected=false;ui.vpnChanging=true;ui.vpnProgress='正在创建 VPN…';ui.notify();
+  assert.equal(view.vpnLabel,'正在创建 VPN…');assert.equal(view.vpnToggleEnabled,false);
+});
+
+test('recovery publishes a new VPN snapshot and explicitly notifies the retained switch projection',async()=>{
+  const {ui,ClientView}=harness();await ui.restoreSession();await ui.setVpn(true);if(ui.refreshTask)await ui.refreshTask;
+  const view=new ClientView();ui.observer=next=>view.apply(next);ui.notify();
+  const before=ui.vpn;let connected=view.vpnConnected,assignments=0;
+  Object.defineProperty(view,'vpnConnected',{get:()=>connected,set:value=>{assignments++;connected=value;}});
+  const report=new ui.recovery.constructor();report.phase='blocked';report.error='other VPN';
+  ui.supervisor.port.publish(report);
+  assert.notEqual(ui.vpn,before);assert.equal(before.connected,true);assert.equal(ui.vpn.connected,false);
+  assert.equal(view.vpnConnected,false);assert.equal(assignments,1);assert.match(view.vpnLabel,/重新连接/);
+});
+
+test('foreground transfer waits quietly and completes account refresh after the accepted VPN command',async()=>{
+  let authorize;const {ui,calls}=harness({}, {}, {}, {authorize:()=>new Promise(resolve=>{authorize=resolve;})});
+  await ui.restoreSession();const on=ui.setVpn(true);
+  for(let i=0;i<100&&!authorize;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(authorize);
+  const statusCalls=calls.filter(call=>call==='status').length;
+  ui.foregroundCallback({});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.foregroundRecoveryPending,true);assert.ok(!ui.message.includes('恢复失败'));
+  assert.equal(calls.filter(call=>call==='status').length,statusCalls);
+  authorize();await on;
+  for(let i=0;i<100&&(ui.foregroundRecoveryPending||ui.refreshTask);i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.foregroundRecoveryPending,false);assert.equal(ui.vpn.connected,true);assert.ok(!ui.message.includes('恢复失败'));
+});
+
+test('successful account recovery removes only its own failure notice, retaining unrelated diagnostics',async()=>{
+  let fail=true;const {ui}=harness({startAccount:async()=>{if(fail)throw new Error('temporary account start failure');return '{"ok":true}';}});
+  await ui.recoverForeground();assert.match(ui.message,/恢复失败/);
+  fail=false;await ui.recoverForeground();assert.equal(ui.message,'');
+  fail=true;await ui.recoverForeground();assert.match(ui.message,/恢复失败/);
+  ui.message='keep separate diagnostic';fail=false;await ui.recoverForeground();assert.equal(ui.message,'keep separate diagnostic');
+});
+
+test('single-flight refresh immediately follows latest submitted filter without accepting the old response',async()=>{
+  const {ui,native}=harness();await ui.restoreSession();let release;const queried=[];
+  native.onlinePeers=filter=>{
+    queried.push(filter);
+    if(filter==='old'){return new Promise(resolve=>{release=resolve;});}
+    return Promise.resolve(JSON.stringify({ok:true,peers:[{...onlinePeer,id:'new-result',hostName:'latest-filter-result'}]}));
+  };
+  ui.peerFilter='old';const first=ui.refreshData();
+  for(let i=0;i<100&&!release;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(release);
+  ui.peerFilter='discarded';const second=ui.refreshData();ui.peerFilter='latest';const third=ui.refreshData();
+  assert.equal(ui.peersStale,true);assert.match(ui.peersError,/筛选条件/);
+  release(JSON.stringify({ok:true,peers:[{...onlinePeer,id:'wrong-old-result'}]}));await Promise.all([first,second,third]);
+  assert.deepEqual(queried,['old','latest']);assert.equal(ui.peers[0].id,'new-result');
+  assert.equal(ui.peersError,'');assert.equal(ui.peersStale,false);assert.equal(ui.peersUpdating,false);
+});
+
+test('expired browser observation retains result-check action without another login or browser launch',async()=>{
+  const {ui,calls}=harness();await ui.login();ui.loginDeadline=Date.now()-1;ui.scheduleLoginRefresh();
+  assert.equal(ui.awaitingLogin,false);assert.equal(ui.loginStage,'browser');assert.match(ui.message,/检查登录结果/);
+  await ui.checkLoginResult();assert.equal(ui.loginStage,'idle');assert.equal(ui.hasAccount(),true);assert.equal(ui.message,'');
+  assert.equal(calls.filter(call=>call==='login').length,1);
+  assert.equal(calls.filter(call=>Array.isArray(call)&&call[0]==='browser').length,1);
+});
+
+test('explicit result checking resumes a paused account host without requesting VPN consent or another login',async()=>{
+  const {ui,calls}=harness();await ui.login();ui.corePaused=true;
+  await ui.checkLoginResult();assert.equal(ui.corePaused,false);assert.equal(ui.hasAccount(),true);
+  assert.equal(calls.filter(call=>call==='login').length,1);assert.ok(!calls.includes('serviceStart'));
+});
+
+test('administrator approval expiry stays approval-specific and manual checking never restarts browser login',async()=>{
+  const approval={ok:true,backendState:'NeedsMachineAuth',loggedIn:false};
+  const {ui,calls,native}=harness({login:async()=>JSON.stringify(approval),getStatus:async()=>JSON.stringify(approval)});
+  await ui.login();ui.loginDeadline=Date.now()-1;ui.scheduleLoginRefresh();
+  assert.equal(ui.awaitingLogin,false);assert.equal(ui.loginStage,'approval');assert.match(ui.message,/检查授权状态/);
+  assert.ok(!ui.message.includes('浏览器'));await ui.checkLoginResult();assert.equal(ui.loginStage,'approval');
+  assert.equal(ui.awaitingLogin,true);assert.ok(!calls.some(call=>Array.isArray(call)&&call[0]==='browser'));
+  native.getStatus=async()=>JSON.stringify(running);await ui.checkLoginResult();
+  assert.equal(ui.loginStage,'idle');assert.equal(ui.awaitingLogin,false);assert.equal(ui.message,'');
+});
+
+test('late browser dispatch preserves an already-observed administrator approval requirement',async()=>{
+  const approval={ok:true,backendState:'NeedsMachineAuth',loggedIn:false};
+  const {ui}=harness({getStatus:async()=>JSON.stringify(approval)});let dispatch;
+  ui.appContext.openLink=()=>new Promise(resolve=>{dispatch=resolve;});const login=ui.login();
+  for(let i=0;i<100&&!dispatch;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(dispatch);
+  await ui.refreshData(true);assert.equal(ui.loginStage,'approval');dispatch();await login;
+  assert.equal(ui.loginStage,'approval');assert.match(ui.message,/管理员批准/);assert.ok(!ui.message.includes('浏览器'));
+});
+
+test('equal successful sync changes only synchronization time without loading or device-row replacement',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.UTC(2026,9,12,10,0,0)});
+  const {ui,ClientView,preview}=harness();const view=new ClientView();ui.observer=next=>view.apply(next);
+  await ui.restoreSession();const rows=view.peerRows,first=rows[0],changedAt=view.lastUpdated,syncedAt=view.lastSynced;
+  const assignments=[];
+  for(const key of ['lastUpdated','lastSynced','peersUpdating','peerRows','vpn']){
+    let value=view[key];Object.defineProperty(view,key,{get:()=>value,set:next=>{assignments.push(key);value=next;}});
+  }
+  t.mock.timers.tick(5000);await ui.refreshData(true);
+  assert.notEqual(view.lastSynced,syncedAt);assert.equal(view.lastUpdated,changedAt);
+  assert.equal(view.peerRows,rows);assert.equal(view.peerRows[0],first);assert.deepEqual(assignments,['lastSynced']);
+  const saved=ui.previewStore.read();assert.equal(saved.syncedAt,view.lastSynced);assert.equal(saved.updatedAt,changedAt);
+  const legacy={...saved};delete legacy.syncedAt;assert.equal(preview.readPreview(JSON.stringify(legacy)).syncedAt,changedAt);
 });

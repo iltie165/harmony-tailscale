@@ -13,6 +13,7 @@ export class AccountSessionPlatform {
   private transferring: boolean = false;
   beginHandoff(): void { this.transferring = true; }
   finishHandoff(): void { this.transferring = false; }
+  isTransferring(): boolean { return this.transferring; }
   async ensure(dir: string, hostname: string): Promise<void> {
     if (this.transferring) { throw new Error('网络服务正在转交，稍后重试同步'); }
     if (this.task) { return this.task; }

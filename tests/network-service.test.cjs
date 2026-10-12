@@ -315,6 +315,157 @@ test('refused authorization retains the account core and sends no handoff or ena
   assert.equal(releases,0);assert.ok(!h.calls.some(Array.isArray));assert.equal(h.client.pending(),false);
 });
 
+test('extension acknowledgment progresses handoff and ON while the SDK start Promise is still pending',async()=>{
+  let available=false,settleStart,released=false;
+  const h=clientHarness({read:()=>available?h.snapshot:undefined,
+    start:id=>{available=true;Object.assign(h.snapshot,{ownerId:id,phase:'handoff_wait',coreAlive:false,serviceReady:false});
+      return new Promise(resolve=>{settleStart=resolve;});},
+    releaseAccount:async()=>{released=true;return '{"ok":true}';},
+    command:c=>{h.calls.push(['command',c.enabled]);
+      if(c.handoff){assert.equal(released,true);Object.assign(h.snapshot,{phase:'idle',coreAlive:true,serviceReady:true,coreId:'11-12'});}
+      else{Object.assign(h.snapshot,{commandId:c.commandId,connected:c.enabled,phase:c.enabled?'connected':'idle',state:c.enabled?'connected':'disconnected',
+        created:c.enabled,processProtected:c.enabled,detached:!c.enabled,destroyed:!c.enabled,attached:c.enabled,ipv4:c.enabled?'100.64.1.1':''});}
+    }});
+  const opening=h.client.ensure(()=>{},true,()=>true,'7-8');
+  await until(()=>released);await opening;
+  assert.equal(h.client.pending(),false);
+  const connected=await h.client.setEnabled(true,()=>{},()=>true,'7-8');assert.equal(connected.connected,true);
+  settleStart();await turn();assert.equal(h.client.pending(),false);
+  await h.client.setEnabled(false,()=>{});assert.equal(h.snapshot.connected,false);
+});
+
+test('cancellation before extension acknowledgment retains the account despite a pending SDK start',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:1000});let settleStart,current=true,releases=0;
+  const h=clientHarness({read:()=>undefined,start:()=>new Promise(resolve=>{settleStart=resolve;}),
+    releaseAccount:async()=>{releases++;return '{"ok":true}';},delay:async()=>{current=false;await turn();}});
+  await assert.rejects(h.client.ensure(()=>{},true,()=>current,'7-8'),/取消/);
+  assert.equal(releases,0);assert.equal(h.client.pending(),true);assert.ok(!h.calls.some(Array.isArray));
+  settleStart();await turn();assert.equal(h.client.pending(),false);
+});
+
+test('late SDK rejection after an acknowledged handoff does not become an unhandled error or replace its owner',async()=>{
+  let available=false,rejectStart;
+  const h=clientHarness({read:()=>available?h.snapshot:undefined,
+    start:id=>{available=true;Object.assign(h.snapshot,{ownerId:id,phase:'handoff_wait',coreAlive:false,serviceReady:false});
+      return new Promise((_resolve,reject)=>{rejectStart=reject;});},
+    command:c=>{assert.equal(c.handoff,true);Object.assign(h.snapshot,{phase:'idle',coreAlive:true,serviceReady:true,coreId:'11-12'});}});
+  const owner=await h.client.ensure(()=>{},true,()=>true,'7-8');
+  rejectStart(new Error('late SDK receipt'));await turn();
+  assert.equal(h.client.pending(),false);assert.equal((await h.client.ensure(()=>{})).coreId,owner.coreId);
+  assert.ok(!h.calls.includes('sdkStop'));
+});
+
+test('late SDK rejection during acknowledged boot cannot abort the live owner or its ON command',async()=>{
+  let available=false,rejectSdk,delays=0;
+  const h=clientHarness({read:()=>available?h.snapshot:undefined,
+    start:id=>{available=true;Object.assign(h.snapshot,{ownerId:id,phase:'handoff_wait',serviceReady:false,coreAlive:false});
+      return new Promise((_resolve,reject)=>{rejectSdk=reject;});},
+    command:c=>{
+      if(c.handoff){Object.assign(h.snapshot,{phase:'booting',coreAlive:true,coreId:'11-12'});}
+      else{Object.assign(h.snapshot,{commandId:c.commandId,connected:c.enabled,phase:c.enabled?'connected':'idle',state:c.enabled?'connected':'disconnected',
+        created:c.enabled,processProtected:c.enabled,detached:!c.enabled,destroyed:!c.enabled,attached:c.enabled,ipv4:c.enabled?'100.64.1.1':''});}
+    },
+    delay:async()=>{delays++;if(delays===1){rejectSdk(new Error('late SDK receipt'));}
+      if(delays===2){Object.assign(h.snapshot,{phase:'idle',serviceReady:true});}await turn();}
+  });
+  const owner=await h.client.ensure(()=>{},true,()=>true,'7-8');assert.equal(owner.coreId,'11-12');
+  const connected=await h.client.setEnabled(true,()=>{},()=>true,'7-8');assert.equal(connected.connected,true);
+  assert.equal(h.client.pending(),false);assert.ok(!h.calls.includes('sdkStop'));
+});
+
+test('an acknowledged stopped actor still fails even when a late receipt is ignored',async()=>{
+  let available=false,rejectSdk;
+  const h=clientHarness({read:()=>available?h.snapshot:undefined,
+    start:id=>{available=true;Object.assign(h.snapshot,{ownerId:id,phase:'handoff_wait',serviceReady:false,coreAlive:false});
+      return new Promise((_resolve,reject)=>{rejectSdk=reject;});},
+    command:()=>{Object.assign(h.snapshot,{phase:'stopped',error:'boot rejected by owner'});rejectSdk(new Error('late receipt'));}
+  });
+  await assert.rejects(h.client.ensure(()=>{},true,()=>true,'7-8'),/boot rejected by owner/);
+});
+
+function bootPlatformHarness(overrides={}) {
+  let alive=false,closes=0,snapshot;
+  const monitor={register:cb=>cb({code:9,message:'registration failed'}),unregister:cb=>cb(),on(){},...overrides.monitor};
+  const native={startService:async()=>{alive=true;return '{"ok":true}';},
+    close:async()=>{closes++;if(overrides.closeFailure){throw new Error('close unconfirmed');}alive=false;return '{"ok":true}';},
+    ...overrides.native};
+  const platform=compile('vpn/NetworkServicePlatform',{
+    '@kit.NetworkKit':{connection:{createNetConnection:()=>monitor}},'@kit.CoreFileKit':{fileIo:{}},'@kit.BasicServicesKit':{},
+    '@kit.PerformanceAnalysisKit':{hilog:{warn(){}}},'libtailscale_napi.so':{default:native},
+    './NetworkServiceModel':model,'../pages/ClientModel':controls,'./NetworkServiceClient':clients,
+    './NetworkServiceStore':{NetworkServiceStore:class{read(){return undefined;}}},'./NetworkEnvironment':{},
+    './VpnRecoveryModel':recovery,'../pages/PlatformInfo':{configurePlatformInfo:async()=>{}}
+  });
+  const port=new platform.PlatformNetworkService({},'/private','same-device');
+  port.publish=s=>{snapshot=model.readServiceSnapshot(JSON.stringify(s));};
+  return {port,native,alive:()=>alive,closes:()=>closes,snapshot:()=>snapshot};
+}
+
+test('listener initialization rejection rolls back only the successfully acquired core',async()=>{
+  const h=bootPlatformHarness();await new model.NetworkServiceActor().run(h.port,'1-2');
+  assert.equal(h.alive(),false);assert.equal(h.closes(),1);assert.equal(h.snapshot().phase,'stopped');
+  assert.match(h.snapshot().error,/registration failed/);
+  const rejected=bootPlatformHarness({native:{startService:async()=>'{"ok":false,"error":"account owns state"}'}});
+  await new model.NetworkServiceActor().run(rejected.port,'1-2');assert.equal(rejected.closes(),0);
+});
+
+test('unconfirmed boot rollback remains cleanup_pending and cannot start a second extension',async()=>{
+  const h=bootPlatformHarness({closeFailure:true});await new model.NetworkServiceActor().run(h.port,'1-2');
+  assert.equal(h.alive(),true);assert.equal(h.closes(),2);assert.equal(h.snapshot().phase,'cleanup_pending');
+  assert.equal(h.snapshot().coreAlive,true);assert.equal(h.snapshot().serviceReady,false);
+  const next=clientHarness({read:()=>h.snapshot()});
+  await assert.rejects(next.client.ensure(()=>{},true,()=>true,'7-8'),/rollback/);
+  assert.ok(!next.calls.includes('sdkStart'));assert.ok(!next.calls.includes('sdkStop'));
+});
+
+test('registration timeout rolls back core and unregisters any late successful listener',async t=>{
+  t.mock.timers.enable({apis:['setTimeout'],now:1000});let registered,unregisters=0;
+  const h=bootPlatformHarness({monitor:{register:cb=>{registered=cb;},unregister:cb=>{unregisters++;cb();}}});
+  const run=new model.NetworkServiceActor().run(h.port,'1-2');await until(()=>registered);
+  t.mock.timers.tick(10001);await run;assert.equal(h.alive(),false);assert.equal(h.closes(),1);
+  const cleaned=unregisters;registered();assert.equal(unregisters,cleaned+1);assert.equal(h.alive(),false);
+});
+
+test('status failure after boot cannot report stopped when owned core shutdown is unconfirmed',async()=>{
+  const h=bootPlatformHarness({closeFailure:true,monitor:{register:cb=>cb()}});
+  h.port.status=async()=>{throw new Error('status unavailable');};
+  await new model.NetworkServiceActor().run(h.port,'1-2');
+  assert.equal(h.alive(),true);assert.equal(h.closes(),1);assert.equal(h.snapshot().phase,'cleanup_pending');
+  assert.equal(h.snapshot().coreAlive,true);assert.match(h.snapshot().error,/status unavailable/);
+});
+
+test('confirmed core shutdown clears live network-map readiness from the final valid snapshot',async t=>{
+  const h=actorHarness(t);const status=h.port.status;
+  h.port.status=async()=>JSON.stringify({...JSON.parse(await status()),networkMapReady:true,assignedIPv4:'100.64.1.1'});
+  await until(()=>h.latest()?.networkMapReady);h.actor.cancel();await h.task;
+  assert.equal(h.latest().phase,'stopped');assert.equal(h.latest().coreAlive,false);
+  assert.equal(h.latest().networkMapReady,false);assert.equal(h.latest().assignedIPv4,'');
+});
+
+test('real client and actor complete first ON when the SDK receipt waits for actual VPN creation',async t=>{
+  const actor=new model.NetworkServiceActor();let snapshot,command,task,settleSdk;
+  let accountOwner=true,attached=false,alive=false;
+  const calls=[],intent=Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'7-8'});
+  const nativeStatus=async()=>JSON.stringify({...new vpn.VpnState(),coreAlive:alive,coreOwner:alive,coreId:alive?'11-12':'',
+    attached,connected:attached,state:attached?'connected':'disconnected',ipv4:attached?'100.64.1.1':'',
+    networkMapReady:alive,assignedIPv4:alive?'100.64.1.1':''});
+  const actorPort={orphanedNetwork:()=>false,intent:()=>intent,request:()=>command,publish:s=>{snapshot=model.readServiceSnapshot(JSON.stringify(s));},delay:turn,
+    boot:async()=>{assert.equal(accountOwner,false);alive=true;calls.push('boot');return '{"ok":true}';},status:nativeStatus,
+    create:async()=>{calls.push('create');settleSdk();return 17;},protect:async()=>{calls.push('protect');},
+    attach:async()=>{attached=true;calls.push('attach');return '{"ok":true}';},
+    detach:async()=>{attached=false;return '{"ok":true}';},closeDescriptor:()=>{},destroy:async()=>{},
+    closeCore:async()=>{alive=false;return '{"ok":true}';}};
+  const client=new clients.NetworkServiceClient({beginHandoff:()=>{},finishHandoff:()=>{},
+    releaseAccount:async()=>{assert.equal(snapshot.phase,'handoff_wait');accountOwner=false;calls.push('release');return '{"ok":true}';},
+    start:id=>{calls.push('sdkStart');const receipt=new Promise(resolve=>{settleSdk=resolve;});task=actor.run(actorPort,id,true,'7-8');return receipt;},
+    read:()=>snapshot,command:c=>{command=c;},connect:async()=>'{"ok":true}',status:nativeStatus,closeProxy:async()=>'{"ok":true}',delay:turn});
+  t.after(async()=>{actor.cancel();settleSdk?.();if(task){await task;}});
+  const opening=client.ensure(()=>{},true,()=>true,'7-8');await until(()=>snapshot?.serviceReady);await opening;
+  const result=await client.setEnabled(true,()=>{},()=>true,'7-8');assert.equal(result.connected,true);
+  assert.deepEqual(calls,['sdkStart','release','boot','create','protect','attach']);
+  await client.setEnabled(false,()=>{});assert.equal(snapshot.coreAlive,true);assert.equal(snapshot.connected,false);
+});
+
 test('preparation actor ignores wrong generations/revisions and never boots until release acknowledgment',async()=>{
   const actor=new model.NetworkServiceActor();let command,snapshot,boots=0,closes=0;
   const intent=Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'7-8'});
@@ -354,4 +505,59 @@ test('rejected extension boot cannot close an existing foreground account owner'
     boot:async()=>'{"ok":false,"error":"account host must release ownership before VPN handoff"}',
     closeCore:async()=>{closed++;return '{"ok":true}';}};
   await actor.run(port,'1-2');assert.equal(closed,0);assert.equal(snapshot.phase,'stopped');assert.match(snapshot.error,/release ownership/);
+});
+
+function bootstrapHarness() {
+  const files=new Map(),calls=[];
+  const fileIo={OpenMode:{CREATE:1,WRITE_ONLY:2,TRUNC:4},openSync:path=>({fd:path}),
+    writeSync:(path,value)=>files.set(path,value),closeSync:()=>{},renameSync:(from,to)=>{files.set(to,files.get(from));files.delete(from);},
+    accessSync:path=>files.has(path),readTextSync:path=>files.get(path)};
+  const stores=compile('vpn/NetworkServiceStore',{'@kit.CoreFileKit':{fileIo},'./NetworkServiceModel':model,'./VpnRecoveryModel':recovery});
+  const store=new stores.NetworkServiceStore('/private');
+  const abilityModule=compile('vpn/VpnProbeAbility',{
+    '@kit.AbilityKit':{},'@kit.NetworkKit':{VpnExtensionAbility:class{},vpnExtension:{createVpnConnection:()=>{calls.push('connection');return {};}}},
+    '@kit.CoreFileKit':{fileIo},'@kit.PerformanceAnalysisKit':{hilog:{info(){},error(){}}},'libtailscale_napi.so':{},
+    './VpnProbeModel':{VpnProbeController:class{}},'./VpnProbeStore':{},'./VpnSessionModel':{VpnSessionController:class{}},
+    './VpnSessionPlatform':{},'./VpnSessionStore':{},'./NetworkServiceModel':{NetworkServiceActor:class{async run(_port,...args){calls.push(['actor',...args]);}}},
+    './NetworkServicePlatform':{PlatformNetworkService:class{constructor(_vpn,dir,hostname){calls.push(['port',dir,hostname]);}}},
+    './NetworkServiceStore':stores
+  });
+  const ability=new abilityModule.default();ability.context={filesDir:'/private'};
+  const platformModule=compile('vpn/NetworkClientPlatform',{
+    '@kit.AbilityKit':{},'@kit.NetworkKit':{vpnExtension:{startVpnExtensionAbility:async want=>{
+      assert.equal(store.pendingStart().ownerId,want.parameters.ownerId);calls.push('sdkStart');ability.onCreate({});
+    }}},'libtailscale_napi.so':{},'./NetworkServiceClient':clients,'../pages/AccountSessionPlatform':{},
+    './NetworkServiceStore':stores,'./NetworkServiceModel':model
+  });
+  const platform=new platformModule.PlatformNetworkClient({filesDir:'/private'},'same-device');
+  store.saveIntent(Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'7-8'}));
+  return {store,files,calls,ability,platform};
+}
+
+test('first-consent launch with stripped Want parameters uses the persisted current ON request and still waits for handoff',async()=>{
+  const h=bootstrapHarness();await h.platform.start('1-2','7-8');await turn();
+  assert.deepEqual(h.calls,['sdkStart','connection',['port','/private','same-device'],['actor','1-2',true,'7-8']]);
+  assert.equal(h.store.pendingStart().hostname,'same-device');
+  assert.equal(h.files.has('/private/network-service-start.json.tmp'),false);
+});
+
+test('parameterless startup cannot revive OFF, another revision, expired or already-consumed requests',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:100000});
+  const h=bootstrapHarness();await h.platform.start('1-2','7-8');h.calls.length=0;
+  h.store.saveIntent(Object.assign(new recovery.VpnIntent(),{enabled:false,revision:'9-10'}));h.ability.onCreate({});
+  h.store.saveIntent(Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'9-10'}));h.ability.onCreate({});
+  h.store.saveIntent(Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'7-8'}));
+  t.mock.timers.tick(90001);h.ability.onCreate({});assert.deepEqual(h.calls,[]);
+  t.mock.timers.setTime(100000);
+  h.store.publish(Object.assign(new model.ServiceSnapshot(),{ownerId:'1-2',phase:'stopped',timestamp:Date.now()}));
+  h.ability.onCreate({});assert.deepEqual(h.calls,[]);
+});
+
+test('explicit diagnostic mode and malformed pending metadata cannot accidentally start the product service',async()=>{
+  const h=bootstrapHarness();await h.platform.start('1-2','7-8');h.calls.length=0;
+  h.ability.onCreate({parameters:{vpnMode:'probe'}});assert.deepEqual(h.calls,[]);
+  h.files.set('/private/network-service-start.json','invalid');h.ability.onCreate({});assert.deepEqual(h.calls,[]);
+  for(const value of [null,{}, {version:1,ownerId:'1-2',intentId:'7-8',hostname:'name\0',timestamp:1000}]){
+    assert.throws(()=>model.readServiceStartRequest(JSON.stringify(value)));
+  }
 });

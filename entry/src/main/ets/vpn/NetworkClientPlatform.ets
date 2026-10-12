@@ -4,7 +4,7 @@ import tailscale from 'libtailscale_napi.so';
 import { NetworkClientPort } from './NetworkServiceClient';
 import { getAccountSession } from '../pages/AccountSessionPlatform';
 import { NetworkServiceStore } from './NetworkServiceStore';
-import { ServiceCommand, ServiceSnapshot } from './NetworkServiceModel';
+import { ServiceCommand, ServiceSnapshot, ServiceStartRequest } from './NetworkServiceModel';
 
 export class PlatformNetworkClient implements NetworkClientPort {
   private context: common.UIAbilityContext;
@@ -15,6 +15,9 @@ export class PlatformNetworkClient implements NetworkClientPort {
   }
   update(context: common.UIAbilityContext, hostname: string): void { this.context=context;this.hostname=hostname; }
   start(ownerId: string, intentId: string = ''): Promise<void> {
+    const request = new ServiceStartRequest();
+    request.ownerId=ownerId;request.hostname=this.hostname;request.intentId=intentId;request.timestamp=Date.now();
+    this.store.saveStart(request);
     const want: Want={bundleName:'com.ezoo.tailscaleprobe',abilityName:'VpnProbeAbility',
       parameters:{vpnMode:'service',ownerId:ownerId,hostname:this.hostname,prepareOnly:true,intentId:intentId}};
     return vpnExtension.startVpnExtensionAbility(want);

@@ -3,7 +3,8 @@ import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
-import { NetworkServicePort, ServiceSnapshot, ServiceCommand, ServiceBlocked } from './NetworkServiceModel';
+import { NetworkServicePort, ServiceSnapshot, ServiceCommand, ServiceBlocked, ServiceBootError } from './NetworkServiceModel';
+import { readControl } from '../pages/ClientModel';
 import { VpnIntent } from './VpnRecoveryModel';
 import { inspectNetworks } from './NetworkEnvironment';
 import { NetworkServiceStore } from './NetworkServiceStore';
@@ -29,11 +30,19 @@ export class PlatformNetworkService implements NetworkServicePort {
     const raw: string = await tailscale.startService(`${this.dir}/tailscale`,this.hostname);
     const result = JSON.parse(raw) as CoreResult;
     if (result.ok) {
-      this.monitor = connection.createNetConnection();
-      await serviceDeadline(this.monitorOperation(true),10000,'注册网络监听');
-      this.monitor.on('netAvailable',() => { this.changed(); });
-      this.monitor.on('netLost',() => { this.changed(); });
-      this.monitor.on('netConnectionPropertiesChange',() => { this.changed(); });
+      try {
+        this.monitor = connection.createNetConnection();
+        await serviceDeadline(this.monitorOperation(true),10000,'注册网络监听');
+        this.monitor.on('netAvailable',() => { this.changed(); });
+        this.monitor.on('netLost',() => { this.changed(); });
+        this.monitor.on('netConnectionPropertiesChange',() => { this.changed(); });
+      } catch (error) {
+        // startService success proves this process acquired the native host.
+        // Never roll back a rejected start (which may belong to account UI).
+        try { readControl(await this.closeCore()); }
+        catch (cleanupError) { throw new ServiceBootError(`${error}; core rollback: ${cleanupError}`,true); }
+        throw new ServiceBootError(`${error}`,false);
+      }
     }
     return raw;
   }
@@ -44,7 +53,11 @@ export class PlatformNetworkService implements NetworkServicePort {
     return new Promise<void>((resolve,reject) => {
       const callback = (error: BusinessError): void => {
         if (error) { reject(new Error(`Network monitor: ${error.code} ${error.message}`)); }
-        else { resolve(); }
+        else {
+          // A late registration after timeout/rollback must not leak a listener.
+          if (register && this.closing) { monitor.unregister((_error: BusinessError): void => {}); }
+          resolve();
+        }
       };
       if (register) { monitor.register(callback); } else { monitor.unregister(callback); }
     });
