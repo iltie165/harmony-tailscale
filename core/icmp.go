@@ -17,7 +17,14 @@ import (
 // RespondToPing option, which replies to all destinations and also passes the
 // request to the OS (potential duplicate replies).
 func installLocalPingResponder(sys *tsd.System, address netip.Addr) {
+	installDynamicPingResponder(sys, func() (netip.Addr, bool) { return address, true })
+}
+func installDynamicPingResponder(sys *tsd.System, local func() (netip.Addr, bool)) {
 	sys.Tun.Get().PostFilterPacketInboundFromWireGuard = func(p *packet.Parsed, t *tstun.Wrapper, g *gro.GRO) (filter.Response, *gro.GRO) {
+		address, enabled := local()
+		if !enabled {
+			return filter.DropSilently, g
+		}
 		if p.IPVersion != 4 || p.IPProto != ipproto.ICMPv4 || p.Dst.Addr() != address || !p.IsEchoRequest() {
 			return filter.Accept, g
 		}

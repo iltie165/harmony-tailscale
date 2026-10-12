@@ -11,10 +11,13 @@ class ABI(unittest.TestCase):
     def setUpClass(cls):
         cls.lib = ctypes.CDLL(os.environ['HARMONY_HOST_LIBRARY'])
         for name in ['version', 'go_version', 'start', 'status', 'login', 'logout',
-                     'online_peers', 'close', 'diagnostics', 'logs']:
+                     'online_peers', 'close', 'diagnostics', 'logs',
+                     'start_service', 'connect_service', 'detach_vpn', 'disconnect_client']:
             fn = getattr(cls.lib, 'tailscale_ohos_' + name)
             fn.restype = ctypes.c_void_p  # c_char_p would lose the owned pointer.
             fn.argtypes = {'start': [ctypes.c_char_p, ctypes.c_char_p],
+                          'start_service': [ctypes.c_char_p, ctypes.c_char_p],
+                          'connect_service': [ctypes.c_char_p, ctypes.c_char_p],
                           'online_peers': [ctypes.c_char_p],
                           'diagnostics': [ctypes.c_char_p]}.get(name, [])
         cls.lib.tailscale_ohos_string_free.argtypes = [ctypes.c_void_p]
@@ -43,6 +46,14 @@ class ABI(unittest.TestCase):
                 self.assertIs(result['ok'], False)
                 self.assertEqual(result['operation'], 'start')
                 self.assertTrue(result['error'])
+
+    def test_service_additions_preserve_owned_strings_and_reject_invalid_bootstrap(self):
+        for name, operation in [('start_service', 'startService'), ('connect_service', 'connectService')]:
+            result = json.loads(self.call(name, b'relative', b'host'))
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['operation'], operation)
+        self.assertTrue(json.loads(self.call('disconnect_client'))['ok'])
+        self.assertFalse(json.loads(self.call('detach_vpn'))['ok'])
 
     def test_idle_calls_are_structured_and_close_is_idempotent(self):
         for name in ['status', 'login', 'logout']:

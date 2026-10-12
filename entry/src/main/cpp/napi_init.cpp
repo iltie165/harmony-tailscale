@@ -18,6 +18,9 @@ constexpr const char *TS_LOG_TAG = "TailscaleNAPI";
 
 enum class AsyncOperation {
     Start,
+    StartService,
+    ConnectService,
+    DisconnectClient,
     Status,
     Login,
     Logout,
@@ -28,6 +31,7 @@ enum class AsyncOperation {
     StartVpn,
     VpnStatus,
     NetworkChanged,
+    DetachVpn,
 };
 
 struct AsyncContext {
@@ -138,6 +142,9 @@ const char *OperationName(AsyncOperation operation)
 {
     switch (operation) {
         case AsyncOperation::Start: return "start";
+        case AsyncOperation::StartService: return "startService";
+        case AsyncOperation::ConnectService: return "connectService";
+        case AsyncOperation::DisconnectClient: return "disconnectClient";
         case AsyncOperation::Status: return "status";
         case AsyncOperation::Login: return "login";
         case AsyncOperation::Logout: return "logout";
@@ -148,6 +155,7 @@ const char *OperationName(AsyncOperation operation)
         case AsyncOperation::StartVpn: return "startVpn";
         case AsyncOperation::VpnStatus: return "vpnStatus";
         case AsyncOperation::NetworkChanged: return "networkChanged";
+        case AsyncOperation::DetachVpn: return "detachVpn";
     }
     return "unknown";
 }
@@ -180,6 +188,20 @@ void ExecuteAsync(napi_env, void *data)
             context->result = TakeGoString(tailscale_ohos_start(
                 const_cast<char *>(context->dataDir.c_str()),
                 const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::StartService:
+            context->result = TakeGoString(tailscale_ohos_start_service(
+                const_cast<char *>(context->dataDir.c_str()), const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::ConnectService:
+            context->result = TakeGoString(tailscale_ohos_connect_service(
+                const_cast<char *>(context->dataDir.c_str()), const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::DisconnectClient:
+            context->result = TakeGoString(tailscale_ohos_disconnect_client());
+            break;
+        case AsyncOperation::DetachVpn:
+            context->result = TakeGoString(tailscale_ohos_detach_vpn());
             break;
         case AsyncOperation::StartVpn:
             context->result = TakeGoString(tailscale_ohos_start_vpn(
@@ -295,6 +317,45 @@ napi_value GetStatus(napi_env env, napi_callback_info)
     auto *context = new AsyncContext();
     context->operation = AsyncOperation::Status;
     return QueueAsync(env, context, "tailscaleStatus");
+}
+
+napi_value StartService(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::StartService;
+    if (argc != 2 || !ReadString(env, argv[0], context->dataDir) || !ReadString(env, argv[1], context->hostname)) {
+        delete context;
+        napi_throw_type_error(env, nullptr, "startService(dir, hostname) requires two strings");
+        return nullptr;
+    }
+    return QueueAsync(env, context, "tailscaleStartService");
+}
+
+napi_value DetachVpn(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::DetachVpn;
+    return QueueAsync(env, context, "tailscaleDetachVpn");
+}
+
+napi_value ConnectService(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto *context = new AsyncContext(); context->operation = AsyncOperation::ConnectService;
+    if (argc != 2 || !ReadString(env, argv[0], context->dataDir) || !ReadString(env, argv[1], context->hostname)) {
+        delete context; napi_throw_type_error(env, nullptr, "connectService(dir, hostname) requires two strings"); return nullptr;
+    }
+    return QueueAsync(env, context, "tailscaleConnectService");
+}
+napi_value DisconnectClient(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext(); context->operation = AsyncOperation::DisconnectClient;
+    return QueueAsync(env, context, "tailscaleDisconnectClient");
 }
 
 napi_value StartVpn(napi_env env, napi_callback_info info)
@@ -414,6 +475,9 @@ napi_value Init(napi_env env, napi_value exports)
         {"getStatus", nullptr, GetStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getLogs", nullptr, GetLogs, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"start", nullptr, Start, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"startService", nullptr, StartService, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"connectService", nullptr, ConnectService, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"disconnectClient", nullptr, DisconnectClient, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"login", nullptr, Login, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"logout", nullptr, Logout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"onlinePeers", nullptr, OnlinePeers, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -423,6 +487,7 @@ napi_value Init(napi_env env, napi_value exports)
         {"startVpn", nullptr, StartVpn, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getVpnStatus", nullptr, VpnStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"networkChanged", nullptr, NetworkChanged, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"detachVpn", nullptr, DetachVpn, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     return exports;

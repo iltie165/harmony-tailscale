@@ -22,7 +22,8 @@ fail explicitly instead of downloading or asking for HDC.
 | C ABI integration | Real Linux `c-shared` library loaded with ctypes | Export/version, null/invalid inputs, JSON errors, independent buffers, actual free, concurrent reads |
 | NAPI real-core integration | Production bridge + Node N-API + actual Go `.so` | Export contract, argument errors/NUL, real Promises, operation JSON, conversion/free and repeated/concurrent calls |
 | NAPI fault integration | Same bridge + minimal SDK wrappers/mock C ABI | Null/empty results, SDK allocation/queue failure, recovery, delayed workers off event loop, one-time URL not logged, newest atomic log tail |
-| UI/contract | Actual page methods and model via SDK TypeScript, mocked platform/native APIs | Session restoration, browser fallback/failure, stale-card clearing, logout, timer bounds, background gating, unmount guards, malformed field types |
+| UI/contract | Actual ClientController and models via SDK TypeScript, mocked platform/native APIs | Session restoration, browser fallback/failure, stale-card clearing, logout, timer bounds, background gating, unmount guards, malformed field types |
+| Service/packet lifecycle | Actual service actor/client and permanent TUN; real official local control + TLS DERP + two encrypted upstream engines | Stable core identity/lease/registered node over repeated ON/OFF, OFF packet discard, reattachment, stale owners, late SDK/cancel/failure and incomplete cleanup |
 | Cross-language contract | Go-generated success/failure fixtures decoded by ClientModel | Producer field names/types, peer and lifecycle envelopes, error propagation |
 | Target build | OpenHarmony ARM64 Go/Native and Hvigor ArkTS | ELF/TLS, C exports, basename-only NAPI dependency, no build-time RPATH, HAP content |
 

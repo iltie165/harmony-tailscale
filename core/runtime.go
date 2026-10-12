@@ -11,8 +11,8 @@ func init() {
 	// OpenHarmony selects Tailscale's Linux compatibility files. The Linux
 	// netns dialer falls back to SO_BINDTODEVICE("lo") when route discovery is
 	// unavailable, which traps control and log traffic on HarmonyOS. tsnet uses
-	// userspace networking in discovery mode. In VPN mode the extension calls
-	// protectProcessNet before constructing the engine. Keep that platform
+	// userspace networking in legacy discovery mode. The product service boots
+	// detached, then calls protectProcessNet before attaching a real vNIC. Keep that platform
 	// transport exclusion instead of invoking Linux netlink/socket controls.
 	netns.SetEnabled(false)
 }

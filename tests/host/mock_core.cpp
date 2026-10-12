@@ -23,6 +23,10 @@ extern "C" char *tailscale_ohos_start(char *, char *host) {
     return Owned(R"({"ok":true,"operation":"start","state":"started"})");
 }
 extern "C" char *tailscale_ohos_status() { return Owned(R"({"ok":true,"operation":"status","backendState":"Running","loggedIn":true})"); }
+extern "C" char *tailscale_ohos_start_service(char *, char *) { return Owned(R"({"ok":true,"operation":"startService","state":"started"})"); }
+extern "C" char *tailscale_ohos_detach_vpn() { return Owned(R"({"ok":true,"operation":"detachVpn","state":"started"})"); }
+extern "C" char *tailscale_ohos_connect_service(char *, char *) { return Owned(R"({"ok":true,"operation":"connectService","state":"started"})"); }
+extern "C" char *tailscale_ohos_disconnect_client() { return Owned(R"({"ok":true,"operation":"disconnectClient","state":"closed"})"); }
 extern "C" char *tailscale_ohos_start_vpn(char *, char *, char *, int) { return Owned(R"({"ok":true,"operation":"startVpn","state":"started"})"); }
 extern "C" char *tailscale_ohos_vpn_status() { return Owned(R"({"ok":true,"connected":false,"state":"disconnected","ipv4":"","txPackets":0,"rxPackets":0,"txBytes":0,"rxBytes":0,"error":""})"); }
 extern "C" char *tailscale_ohos_network_changed() { return Owned(R"({"ok":true,"operation":"networkChanged","state":"started"})"); }

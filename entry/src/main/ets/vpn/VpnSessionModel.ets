@@ -9,6 +9,11 @@ export class VpnState {
   rxBytes: number = 0;
   error: string = '';
   debugLogs: string[] = [];
+  coreId: string = '';
+  coreAlive: boolean = false;
+  coreOwner: boolean = false;
+  attached: boolean = false;
+  startedAt: number = 0;
 }
 export class VpnSessionReport extends VpnState {
   requestId: string = '';
@@ -30,6 +35,11 @@ export function readVpnState(raw: string): VpnState {
     typeof s.state !== 'string' || typeof s.error !== 'string' || typeof s.ipv4 !== 'string' ||
     ![s.txPackets, s.rxPackets, s.txBytes, s.rxBytes].every((n: number) => Number.isFinite(n) && n >= 0) ||
     (s.debugLogs !== undefined && (!Array.isArray(s.debugLogs) || !s.debugLogs.every((line: string) => typeof line === 'string'))) ||
+    (s.coreId !== undefined && typeof s.coreId !== 'string') ||
+    (s.coreAlive !== undefined && typeof s.coreAlive !== 'boolean') ||
+    (s.coreOwner !== undefined && typeof s.coreOwner !== 'boolean') ||
+    (s.attached !== undefined && typeof s.attached !== 'boolean') ||
+    (s.startedAt !== undefined && (!Number.isFinite(s.startedAt) || s.startedAt < 0)) ||
     (s.connected && (!s.ok || s.state !== 'connected' || !tailnetIPv4(s.ipv4) || s.error !== ''))) {
     throw new Error('Invalid VPN service status');
   }

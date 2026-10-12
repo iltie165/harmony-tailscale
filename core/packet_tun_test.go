@@ -219,7 +219,7 @@ func TestRemoteVPNLocalAPIAndOwnerDisappearance(t *testing.T) {
 		case "/localapi/v0/status":
 			json.NewEncoder(w).Encode(ipnstate.Status{BackendState: "Running"})
 		case "/harmony/vpn":
-			json.NewEncoder(w).Encode(vpnState{OK: true, Connected: true, State: "connected", IPv4: "100.64.1.1", TxPackets: 3})
+			json.NewEncoder(w).Encode(vpnState{OK: true, Connected: true, State: "connected", IPv4: "100.64.1.1", TxPackets: 3, CoreOwner: true})
 		default:
 			http.NotFound(w, r)
 		}
@@ -240,7 +240,7 @@ func TestRemoteVPNLocalAPIAndOwnerDisappearance(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := remote.VPNState(context.Background())
-	if !s.Connected || s.TxPackets != 3 {
+	if !s.Connected || s.TxPackets != 3 || s.CoreOwner {
 		t.Fatal(s)
 	}
 	remote.Close()
@@ -266,27 +266,33 @@ func TestPlatformRouterAddressMismatch(t *testing.T) {
 func TestOfficialEngineEncryptedIPv4PacketsBothDirections(t *testing.T) {
 	var engines [2]wgengine.Engine
 	var systems [2]*tsd.System
+	var devices [2]*switchTun
 	var fds [2]int
 	var keys = [2]key.NodePrivate{key.NewNode(), key.NewNode()}
 	var ips = [2]netip.Prefix{netip.MustParsePrefix("100.64.1.1/32"), netip.MustParsePrefix("100.64.1.2/32")}
 	for i := range engines {
 		tun, _, fd := socketTun(t)
+		device := newSwitchTun()
+		if err := device.attach(tun); err != nil {
+			t.Fatal(err)
+		}
+		devices[i] = device
 		fds[i] = fd
 		sys := tsd.NewSystem()
 		systems[i] = sys
 		mon := netmon.NewStatic()
 		sys.Set(mon)
-		engine, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{Tun: tun, Router: &platformRouter{address: ips[i].Addr()}, NetMon: mon, SetSubsystem: sys.Set, EventBus: sys.Bus.Get(), HealthTracker: sys.HealthTracker(), Metrics: sys.UserMetricsRegistry()})
+		engine, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{Tun: device, Router: &platformRouter{address: ips[i].Addr()}, NetMon: mon, SetSubsystem: sys.Set, EventBus: sys.Bus.Get(), HealthTracker: sys.HealthTracker(), Metrics: sys.UserMetricsRegistry()})
 		if err != nil {
 			t.Fatal(err)
 		}
 		engines[i] = engine
 		sys.Set(engine)
-		installLocalPingResponder(sys, ips[i].Addr())
+		installDynamicPingResponder(sys, func() (netip.Addr, bool) { attached, _ := device.snapshot(); return ips[i].Addr(), attached })
 		engine.SetFilter(filter.NewAllowAllForTest(logger.Discard))
 		sys.Tun.Get().Start()
 		t.Cleanup(func() {
-			tun.Close()
+			device.Close()
 			engine.Close()
 			<-engine.Done()
 			sys.Dialer.Get().Close()
@@ -321,6 +327,48 @@ func TestOfficialEngineEncryptedIPv4PacketsBothDirections(t *testing.T) {
 			}
 		}
 	}
+	suite := t
+	t.Run("RepeatedOffOnKeepsEnginesAndDropsOfflinePackets", func(t *testing.T) {
+		ports := [2]uint16{systems[0].MagicSock.Get().LocalPort(), systems[1].MagicSock.Get().LocalPort()}
+		for cycle := 0; cycle < 3; cycle++ {
+			oldFd := fds[1]
+			if err := devices[1].detach(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := unix.Write(fds[0], ipv4TestPacket(ips[0].Addr(), ips[1].Addr(), 17)); err != nil {
+				t.Fatal(err)
+			}
+			assertNoPacket(t, oldFd)
+			if _, err := unix.Write(fds[0], echoTestPacket(ips[0].Addr(), ips[1].Addr())); err != nil {
+				t.Fatal(err)
+			}
+			assertNoPacket(t, fds[0])
+			fresh, _, fd := socketTun(suite)
+			fds[1] = fd
+			if err := devices[1].attach(fresh); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				select {
+				case <-engines[i].Done():
+					t.Fatal("engine was restarted/stopped")
+				default:
+				}
+				if systems[i].MagicSock.Get().LocalPort() != ports[i] {
+					t.Fatal("transport recreated")
+				}
+				for _, protocol := range []byte{6, 17} {
+					p := ipv4TestPacket(ips[i].Addr(), ips[i^1].Addr(), protocol)
+					if _, err := unix.Write(fds[i], p); err != nil {
+						t.Fatal(err)
+					}
+					if got := receivePacket(t, fds[i^1]); !bytes.Equal(p, got) {
+						t.Fatal("reattached packet differs")
+					}
+				}
+			}
+		}
+	})
 	t.Run("ICMPRepliesThroughEncryptedTransportWithoutOS", func(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			request := echoTestPacket(ips[i].Addr(), ips[i^1].Addr())

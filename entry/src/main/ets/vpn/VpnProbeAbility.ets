@@ -8,6 +8,8 @@ import { writeVpnProbe } from './VpnProbeStore';
 import { VpnSessionController, VpnSessionReport } from './VpnSessionModel';
 import { PlatformVpnSession } from './VpnSessionPlatform';
 import { publishSession } from './VpnSessionStore';
+import { NetworkServiceActor } from './NetworkServiceModel';
+import { PlatformNetworkService } from './NetworkServicePlatform';
 
 class PlatformVpnProbePort implements VpnProbePort {
   private connection: vpnExtension.VpnConnection;
@@ -29,8 +31,12 @@ class PlatformVpnProbePort implements VpnProbePort {
 export default class VpnProbeAbility extends VpnExtensionAbility {
   private controller: VpnProbeController = new VpnProbeController();
   private session: VpnSessionController = new VpnSessionController();
+  private service: NetworkServiceActor = new NetworkServiceActor();
 
   onCreate(want: Want): void {
+    if (want.parameters?.vpnMode === 'service') {
+      this.runService(want); return;
+    }
     if (want.parameters?.vpnMode === 'tailnet') {
       this.runSession(want);
       return;
@@ -48,6 +54,19 @@ export default class VpnProbeAbility extends VpnExtensionAbility {
     // The controller checks cancellation after each await and always cleans up.
     this.controller.cancel();
     this.session.cancel();
+    this.service.cancel();
+  }
+
+  private async runService(want: Want): Promise<void> {
+    const ownerId = want.parameters?.ownerId;
+    const hostname = want.parameters?.hostname;
+    if (typeof ownerId !== 'string' || !/^[0-9-]{1,80}$/.test(ownerId) || typeof hostname !== 'string') {
+      hilog.error(0x5453,'TailscaleVPN','Invalid network service bootstrap');return;
+    }
+    try {
+      const port = new PlatformNetworkService(vpnExtension.createVpnConnection(this.context),this.context.filesDir,hostname);
+      await this.service.run(port,ownerId);
+    } catch (_error) { hilog.error(0x5453,'TailscaleVPN','Network service actor terminated'); }
   }
 
   private async runSession(want: Want): Promise<void> {

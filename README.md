@@ -52,7 +52,21 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
-### Client UI and 3.2.4 VPN Alpha
+### Client UI and 3.3.0 unified-core Alpha
+
+3.3.0 moves login, discovery and VPN into one extension-owned service. The
+page is a view over a shared client controller. Normal ON/OFF creates/protects/
+attaches or detaches/destroys the platform vNIC; it does not restart the official
+engine or relinquish its state lease. UI startup connects to a healthy existing
+owner; only confirmed engine failure/process loss needs recovery. Saved display
+metadata is still not live authentication or VPN proof.
+
+The first service bootstrap may require system VPN-service consent even while
+the product toggle is OFF. No Tailnet vNIC is created until ON. Warm OFF keeps
+the core/control connection, so this is not a zero-background-resource mode.
+HarmonyOS may terminate the extension; residency while OFF, phone SDK behavior
+and background streaming are **not yet verified on a phone**. See
+[3.3.0 architecture, evidence and acceptance](docs/vpn-3.3.0.md).
 
 The Chinese-language client UI separates the welcome/login screen from the
 signed-in device list. It displays the real account, Tailnet, local Tailscale
@@ -61,8 +75,8 @@ details. Returning from browser authentication refreshes the session automatical
 Existing sessions are restored on launch; bounded polling handles asynchronous
 backend startup. Settings contains diagnostics and selectable raw results.
 
-The main VPN switch now starts a user-authorized VPN extension with the node's
-assigned IPv4, Tailnet-only route and the official WireGuard engine. OFF preserves
+The main VPN switch attaches the node's assigned IPv4 and Tailnet-only route
+to the service's official WireGuard engine. OFF preserves
 login and destroys the owned interface after joining packet I/O. UI/extension
 ownership uses a state lease and private Unix LocalAPI, not duplicate nodes.
 No default route or system DNS override is installed. MagicDNS, IPv6, exit nodes
@@ -79,7 +93,8 @@ successful sync, the next launch can show the account/devices before core
 startup completes. Reconnection keeps explicitly labelled historical devices;
 foreground OFF-mode refreshes silently too. Device-query errors do not negate
 independently confirmed VPN startup. This is a display/state improvement, not
-a permanent-core or background-lifecycle redesign. See [3.2.4](docs/vpn-3.2.4.md).
+a permanent-core or background-lifecycle redesign. That limitation describes
+the historical 3.2.4 release, superseded by 3.3.0 above. See [3.2.4](docs/vpn-3.2.4.md).
 
 The opt-in diagnostic remains available separately: a temporary vNIC with no
 routes or DNS override, descriptor/protection checks, and automatic cleanup.

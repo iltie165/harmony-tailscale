@@ -102,6 +102,11 @@ type vpnState struct {
 	RxBytes   uint64   `json:"rxBytes"`
 	Error     string   `json:"error"`
 	DebugLogs []string `json:"debugLogs,omitempty"`
+	CoreID    string   `json:"coreId,omitempty"`
+	CoreAlive bool     `json:"coreAlive"`
+	CoreOwner bool     `json:"coreOwner"`
+	Attached  bool     `json:"attached"`
+	StartedAt int64    `json:"startedAt,omitempty"`
 }
 type vpnStateProvider interface {
 	VPNState(context.Context) vpnState
@@ -140,6 +145,7 @@ func (b *remoteBackend) VPNState(ctx context.Context) vpnState {
 	if err = json.NewDecoder(response.Body).Decode(&result); err != nil || response.StatusCode != 200 {
 		return vpnState{State: "error", Error: fmt.Sprintf("invalid VPN service response: %v", err)}
 	}
+	result.CoreOwner = false // The caller holds a proxy, never the owner's lease.
 	return result
 }
 
@@ -147,24 +153,29 @@ func (b *remoteBackend) VPNState(ctx context.Context) vpnState {
 // configurator never invokes Linux netlink/iptables or installs a default route.
 // Address changes fail closed: the interface must be recreated before use.
 type platformRouter struct {
-	address netip.Addr
-	mu      sync.Mutex
-	err     string
+	address    netip.Addr
+	mu         sync.Mutex
+	err        string
+	detachable bool
+	attached   bool
 }
 
 func (r *platformRouter) Up() error                                { return nil }
 func (r *platformRouter) Close() error                             { return nil }
 func (r *platformRouter) UpdateMagicsockPort(uint16, string) error { return nil }
 func (r *platformRouter) Set(c *router.Config) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if c == nil {
 		return nil
 	}
 	for _, prefix := range c.LocalAddrs {
-		if prefix.Addr().Is4() && prefix.Addr() != r.address {
+		if prefix.Addr().Is4() && r.detachable && !r.attached {
+			r.address = prefix.Addr()
+			r.err = ""
+		} else if prefix.Addr().Is4() && prefix.Addr() != r.address {
 			err := fmt.Errorf("Tailnet address changed; reconnect VPN")
-			r.mu.Lock()
 			r.err = err.Error()
-			r.mu.Unlock()
 			return err
 		}
 	}
@@ -183,6 +194,9 @@ type serviceBackend struct {
 	client                 *local.Client
 	once                   sync.Once
 	closeErr               error
+	device                 *switchTun
+	coreID                 string
+	startedAt              int64
 }
 
 func (b *serviceBackend) Start() (err error) {
@@ -195,6 +209,14 @@ func (b *serviceBackend) Start() (err error) {
 	if err != nil {
 		return err
 	}
+	b.coreID = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	b.startedAt = time.Now().UnixMilli()
+	b.device = newSwitchTun()
+	if b.tun != nil {
+		if err = b.device.attach(b.tun); err != nil {
+			return err
+		}
+	}
 	sys := tsd.NewSystem()
 	b.sys = sys
 	mon, err := netmon.New(sys.Bus.Get(), bridgeLogf)
@@ -203,16 +225,22 @@ func (b *serviceBackend) Start() (err error) {
 	}
 	sys.Set(mon)
 	dialer := &tsdial.Dialer{Logf: bridgeLogf}
-	b.router = &platformRouter{address: netip.MustParseAddr(b.address)}
+	address, _ := netip.ParseAddr(b.address)
+	b.router = &platformRouter{address: address, detachable: true, attached: b.tun != nil}
 	engine, err := wgengine.NewUserspaceEngine(bridgeLogf, wgengine.Config{
-		Tun: b.tun, Router: b.router, NetMon: mon, Dialer: dialer, EventBus: sys.Bus.Get(),
+		Tun: b.device, Router: b.router, NetMon: mon, Dialer: dialer, EventBus: sys.Bus.Get(),
 		SetSubsystem: sys.Set, ControlKnobs: sys.ControlKnobs(), HealthTracker: sys.HealthTracker(), Metrics: sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		return err
 	}
 	sys.Set(engine)
-	installLocalPingResponder(sys, b.router.address)
+	installDynamicPingResponder(sys, func() (netip.Addr, bool) {
+		attached, _ := b.device.snapshot()
+		b.router.mu.Lock()
+		defer b.router.mu.Unlock()
+		return b.router.address, attached && b.router.err == ""
+	})
 	stateStore, err := store.New(bridgeLogf, filepath.Join(b.dir, "tailscaled.state"))
 	if err != nil {
 		return err
@@ -223,12 +251,15 @@ func (b *serviceBackend) Start() (err error) {
 		return err
 	}
 	b.lb.SetVarRoot(b.dir)
-	prefs := ipn.NewPrefs()
-	prefs.Hostname = b.hostname
-	prefs.WantRunning = true
-	prefs.CorpDNS = false
-	prefs.RouteAll = false
-	if err = b.lb.Start(ipn.Options{UpdatePrefs: prefs}); err != nil {
+	// Initialize the official profile first; reading Prefs before Start does not
+	// yet load persisted settings. A full default UpdatePrefs would overwrite
+	// the control URL and logged-out preference, despite retaining node keys.
+	if err = b.lb.Start(ipn.Options{}); err != nil {
+		return err
+	}
+	_, err = b.lb.EditPrefs(&ipn.MaskedPrefs{Prefs: ipn.Prefs{Hostname: b.hostname, WantRunning: true, CorpDNS: false, RouteAll: false},
+		HostnameSet: true, WantRunningSet: true, CorpDNSSet: true, RouteAllSet: true})
+	if err != nil {
 		return err
 	}
 	sys.Tun.Get().Start()
@@ -269,36 +300,53 @@ func (b *serviceBackend) LocalClient() (controlClient, error) {
 	return localAdapter{b.client}, nil
 }
 func (b *serviceBackend) VPNState(context.Context) vpnState {
-	s := vpnState{OK: true, State: "connecting", IPv4: b.address}
+	s := vpnState{OK: true, State: "disconnected", CoreID: b.coreID, StartedAt: b.startedAt, CoreOwner: true}
 	s.DebugLogs = recentLogLines(24)
-	if b.tun == nil {
+	if b.device == nil {
 		return s
 	}
-	s.TxPackets = b.tun.txPackets.Load()
-	s.RxPackets = b.tun.rxPackets.Load()
-	s.TxBytes = b.tun.txBytes.Load()
-	s.RxBytes = b.tun.rxBytes.Load()
-	b.tun.errMu.Lock()
-	s.Error = b.tun.lastError
-	b.tun.errMu.Unlock()
+	s.Attached, s.Error = b.device.snapshot()
+	s.TxPackets = b.device.txPackets.Load()
+	s.RxPackets = b.device.rxPackets.Load()
+	s.TxBytes = b.device.txBytes.Load()
+	s.RxBytes = b.device.rxBytes.Load()
+	if b.sys != nil {
+		engine, ok := b.sys.Engine.GetOK()
+		if !ok {
+			s.OK = false
+			s.State = "error"
+			s.Error = "core engine unavailable"
+			return s
+		}
+		select {
+		case <-engine.Done():
+			s.OK = false
+			s.State = "error"
+			s.Error = "core engine stopped"
+			return s
+		default:
+			s.CoreAlive = true
+		}
+	}
 	if b.router != nil {
 		b.router.mu.Lock()
+		if s.Attached {
+			s.IPv4 = b.router.address.String()
+		}
 		if b.router.err != "" {
 			s.Error = b.router.err
 		}
 		b.router.mu.Unlock()
-	}
-	select {
-	case <-b.tun.done:
-		s.State = "disconnected"
-		return s
-	default:
 	}
 	if s.Error != "" {
 		s.OK = false
 		s.State = "error"
 		return s
 	}
+	if !s.Attached {
+		return s
+	}
+	s.State = "connecting"
 	if b.lb != nil && b.lb.State() == ipn.Running {
 		s.Connected = true
 		s.State = "connected"
@@ -308,7 +356,9 @@ func (b *serviceBackend) VPNState(context.Context) vpnState {
 func (b *serviceBackend) Close() error {
 	b.once.Do(func() {
 		// LocalBackend owns and joins the engine. Closing TUN first wakes reads.
-		if b.tun != nil {
+		if b.device != nil {
+			b.closeErr = b.device.Close()
+		} else if b.tun != nil {
 			b.closeErr = b.tun.Close()
 		}
 		if b.api != nil {

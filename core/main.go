@@ -35,7 +35,7 @@ func panicResult(operation string, output **C.char) {
 		message := fmt.Sprintf("panic: %v", recovered)
 		stack := string(debug.Stack())
 		appendLog("%s\n%s", message, stack)
-		if operation == "start" || operation == "startVpn" || operation == "close" {
+		if operation == "start" || operation == "startService" || operation == "startVpn" || operation == "close" {
 			lifecycle.Lock()
 			lifecycle.state = "panic"
 			lifecycle.lastError = message
@@ -86,6 +86,30 @@ func tailscale_ohos_start(cDataDir, cHostname *C.char) (output *C.char) {
 func tailscale_ohos_start_vpn(cDataDir, cHostname, cAddress *C.char, fd C.int) (output *C.char) {
 	defer panicResult("startVpn", &output)
 	return cJSON(startVpnCore(C.GoString(cDataDir), C.GoString(cHostname), C.GoString(cAddress), int(fd)))
+}
+
+//export tailscale_ohos_start_service
+func tailscale_ohos_start_service(cDataDir, cHostname *C.char) (output *C.char) {
+	defer panicResult("startService", &output)
+	return cJSON(startServiceCore(C.GoString(cDataDir), C.GoString(cHostname)))
+}
+
+//export tailscale_ohos_detach_vpn
+func tailscale_ohos_detach_vpn() (output *C.char) {
+	defer panicResult("detachVpn", &output)
+	return cJSON(detachVpnCore())
+}
+
+//export tailscale_ohos_connect_service
+func tailscale_ohos_connect_service(cDataDir, cHostname *C.char) (output *C.char) {
+	defer panicResult("connectService", &output)
+	return cJSON(connectServiceCore(C.GoString(cDataDir), C.GoString(cHostname)))
+}
+
+//export tailscale_ohos_disconnect_client
+func tailscale_ohos_disconnect_client() (output *C.char) {
+	defer panicResult("disconnectClient", &output)
+	return cJSON(disconnectServiceClient())
 }
 
 //export tailscale_ohos_vpn_status

@@ -119,7 +119,7 @@ test('wrong argument counts and types are rejected before entering C ABI', () =>
     assert.throws(() => native.startVpn(...args), TypeError);
   }
   for (const args of [[], ['/tmp'], [1, 'host'], ['/tmp', null], ['/tmp', 'a\0b'], ['/tmp\0elsewhere', 'host']]) {
-    assert.throws(() => native.start(...args), TypeError);
+    for (const method of ['start','startService','connectService']) assert.throws(() => native[method](...args), TypeError);
   }
   for (const fn of ['onlinePeers', 'diagnostics']) {
     assert.throws(() => native[fn](), TypeError);
@@ -137,6 +137,9 @@ test('VPN NAPI startup and independent status use the real async ABI', async () 
 });
 test('async methods return real Promises and the proper operation JSON', async () => {
   for (const [name, args, operation] of [
+    ['startService', ['relative', 'host'], 'startService'],
+    ['connectService', ['relative', 'host'], 'connectService'],
+    ['detachVpn', [], 'detachVpn'], ['disconnectClient', [], 'disconnectClient'],
     ['start', ['relative', 'host'], 'start'], ['getStatus', [], 'status'],
     ['login', [], 'login'], ['logout', [], 'logout'],
     ['onlinePeers', ['group:dev'], 'onlinePeers'], ['close', [], 'close'],
@@ -147,7 +150,7 @@ test('async methods return real Promises and the proper operation JSON', async (
     const result = await parse(promise);
     assert.equal(result.operation, operation);
     assert.equal(typeof result.ok, 'boolean');
-    if (real && operation !== 'close') assert.equal(result.ok, false);
+    if (real && operation !== 'close' && operation !== 'disconnectClient') assert.equal(result.ok, false);
   }
 });
 test('NAPI SDK allocation/queue failures throw and subsequent work recovers', async () => {
