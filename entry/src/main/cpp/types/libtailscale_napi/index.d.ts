@@ -16,3 +16,5 @@ export const inspectVpnDescriptor: (fd: number) => Promise<string>;
 export const startVpn: (dataDir: string, hostname: string, ipv4: string, fd: number) => Promise<string>;
 export const getVpnStatus: () => Promise<string>;
 export const networkChanged: () => Promise<string>;
+export const startAccount: (dataDir: string, hostname: string) => Promise<string>;
+export const releaseAccount: () => Promise<string>;

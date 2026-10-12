@@ -117,3 +117,108 @@ func TestRealStartingCoreWithoutDERPCanAttachAuthorizedNetworkMap(t *testing.T) 
 		t.Fatal(s)
 	}
 }
+
+// An actual upstream core receives an authorized map from the local encrypted
+// test control server, with no peer or DERP available. Starting is expected.
+func TestRealForegroundAccountHandoffPreservesNodeAndAddressWithoutDERP(t *testing.T) {
+	setupBackend(t, &fakeBackend{})
+	control := &testcontrol.Server{Logf: t.Logf, DERPMap: &tailcfg.DERPMap{Regions: map[int]*tailcfg.DERPRegion{}}}
+	httpServer := httptest.NewServer(control)
+	defer httpServer.Close()
+	control.HTTPTestServer = httpServer
+	dir := t.TempDir()
+	stateStore, err := store.New(logger.Discard, filepath.Join(dir, "tailscaled.state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefs := savedTestPrefs()
+	prefs.ControlURL = httpServer.URL
+	profile := &ipn.LoginProfile{ID: "test", Key: "profile-test", Name: "Saved", UserProfile: prefs.Persist.UserProfile, ControlURL: prefs.ControlURL}
+	for k, v := range map[ipn.StateKey][]byte{ipn.KnownProfilesStateKey: encodeJSON(map[ipn.ProfileID]*ipn.LoginProfile{profile.ID: profile}), ipn.CurrentProfileStateKey: []byte(profile.Key), profile.Key: encodeJSON(prefs)} {
+		if err := stateStore.WriteState(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := startAccountCore(dir, "test-starting"); !r.OK {
+		t.Fatal(r)
+	}
+	defer closeCore()
+	server, _, _ := currentServer()
+	owner := server.(*serviceBackend)
+	if err := owner.client.StartLoginInteractive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !owner.readyIPv4().IsValid() && time.Now().Before(deadline) {
+		owner.sys.MagicSock.Get().SetNetworkUp(true)
+		time.Sleep(10 * time.Millisecond)
+	}
+	ip := owner.readyIPv4()
+	if !ip.IsValid() || owner.lb.State() != ipn.Starting {
+		t.Fatal("expected ready map before peer/DERP Running", owner.lb.State(), ip)
+	}
+	if s := fetchControlStatus("status"); !s.OK || !s.LoggedIn || s.BackendState != "Starting" {
+		t.Fatal(s)
+	}
+	if p := onlinePeersCore(""); !p.OK || p.Count != 0 {
+		t.Fatal("empty authorized tailnet must be ready", p)
+	}
+	if host := vpnStateCore(); host.CoreHost != "account" || host.Attached || host.Connected {
+		t.Fatal(host)
+	}
+	if r := startServiceCore(dir, "test-starting"); r.OK {
+		t.Fatal("VPN host started before account release", r)
+	}
+	originalMap := owner.lb.NetMap()
+	originalKey := originalMap.NodeKey
+	originalNode := originalMap.SelfNode.ID()
+	if control.NumNodes() != 1 {
+		t.Fatal("unexpected initial node count", control.NumNodes())
+	}
+	if lease, err := acquireStateLease(dir); err == nil {
+		lease.Close()
+		t.Fatal("account did not hold exclusive lease")
+	}
+	if r := releaseAccountCore(); !r.OK {
+		t.Fatal(r)
+	}
+	lease, err := acquireStateLease(dir)
+	if err != nil {
+		t.Fatal("account handoff did not release lock", err)
+	}
+	lease.Close()
+	if r := startServiceCore(dir, "test-starting"); !r.OK {
+		t.Fatal(r)
+	}
+	server, _, _ = currentServer()
+	owner = server.(*serviceBackend)
+	deadline = time.Now().Add(10 * time.Second)
+	for !owner.readyIPv4().IsValid() && time.Now().Before(deadline) {
+		owner.sys.MagicSock.Get().SetNetworkUp(true)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if owner.readyIPv4() != ip || owner.lb.NetMap() == nil || owner.lb.NetMap().SelfNode.ID() != originalNode || owner.lb.NetMap().NodeKey != originalKey || control.NumNodes() != 1 {
+		t.Fatal("handoff changed identity/address or created a second node", owner.readyIPv4(), control.NumNodes())
+	}
+	before := vpnStateCore().CoreID
+	if r := releaseAccountCore(); !r.OK || vpnStateCore().CoreID != before {
+		t.Fatal("account API stopped VPN core", r)
+	}
+	_, original, _ := socketTun(t)
+	if r := startVpnCore(dir, "test-starting", ip.String(), original); !r.OK {
+		t.Fatal(r)
+	}
+	s := vpnStateCore()
+	if !s.Connected || !s.Attached || !s.NetworkMapReady || s.AssignedIPv4 != ip.String() {
+		t.Fatal(s)
+	}
+	if owner.lb.State() != ipn.Starting {
+		t.Fatal("test accidentally established a relay")
+	}
+	if r := detachVpnCore(); !r.OK {
+		t.Fatal(r)
+	}
+	if s := vpnStateCore(); s.Connected || !s.NetworkMapReady {
+		t.Fatal(s)
+	}
+}

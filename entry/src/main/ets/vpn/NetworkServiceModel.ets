@@ -14,6 +14,7 @@ export class ServiceCommand {
   enabled: boolean = false;
   shutdown: boolean = false;
   repair: boolean = false;
+  handoff: boolean = false;
   intentId: string = '';
 }
 export class ServiceSnapshot extends VpnState {
@@ -55,7 +56,7 @@ export function readServiceCommand(raw: string): ServiceCommand {
     !/^[0-9-]{1,80}$/.test(c.commandId) || typeof c.enabled !== 'boolean' || typeof c.shutdown !== 'boolean') {
     throw new Error('Invalid network service command');
   }
-  if ((c.repair !== undefined && typeof c.repair !== 'boolean') || (c.intentId !== undefined && typeof c.intentId !== 'string')) {
+  if ((c.repair !== undefined && typeof c.repair !== 'boolean') || (c.handoff !== undefined && typeof c.handoff !== 'boolean') || (c.intentId !== undefined && typeof c.intentId !== 'string')) {
     throw new Error('Invalid network service recovery command');
   }
   return c;
@@ -162,7 +163,7 @@ export class NetworkServiceActor {
     s.descriptorClosed = true;
     this.check(port,s);
   }
-  async run(port: NetworkServicePort, ownerId: string): Promise<ServiceSnapshot> {
+  async run(port: NetworkServicePort, ownerId: string, prepareOnly: boolean = false, intentId: string = ''): Promise<ServiceSnapshot> {
     if (this.active) { throw new Error('Network service actor already running'); }
     this.active = true;
     const s = new ServiceSnapshot(); s.ownerId = ownerId;
@@ -171,8 +172,25 @@ export class NetworkServiceActor {
     try {
       if (port.orphanedNetwork()) { s.created = true; s.destroyed = false; }
       this.publish(port,s);
-      coreTouched = true;
+      if (prepareOnly) {
+        s.phase = 'handoff_wait'; this.publish(port,s);
+        const deadline = Date.now()+30000;
+        let released = false;
+        while (!this.cancelled && Date.now()<deadline) {
+          const intent = port.intent();
+          if (!intent || !intent.enabled || intent.revision !== intentId) { throw new Error('VPN 开启已取消'); }
+          const command = port.request();
+          if (command?.ownerId === ownerId) {
+            if (command.shutdown) { this.cancel('user_cancelled'); break; }
+            if (command.handoff && !command.enabled && command.intentId === intentId) { released = true; break; }
+          }
+          this.publish(port,s); await port.delay();
+        }
+        if (!released || this.cancelled) { throw new Error('账号服务转交已取消或超时'); }
+        s.phase = 'booting'; this.publish(port,s);
+      }
       readControl(await port.boot());
+      coreTouched = true;
       const initial = readVpnState(await port.status());
       if (!initial.coreAlive || !initial.coreId || !initial.coreOwner) { throw new Error('Exclusive core ownership could not be confirmed'); }
       ownsCore = true;

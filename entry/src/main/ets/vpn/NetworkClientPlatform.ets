@@ -2,6 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { vpnExtension } from '@kit.NetworkKit';
 import tailscale from 'libtailscale_napi.so';
 import { NetworkClientPort } from './NetworkServiceClient';
+import { getAccountSession } from '../pages/AccountSessionPlatform';
 import { NetworkServiceStore } from './NetworkServiceStore';
 import { ServiceCommand, ServiceSnapshot } from './NetworkServiceModel';
 
@@ -13,11 +14,14 @@ export class PlatformNetworkClient implements NetworkClientPort {
     this.context=context;this.hostname=hostname;this.store=new NetworkServiceStore(context.filesDir);
   }
   update(context: common.UIAbilityContext, hostname: string): void { this.context=context;this.hostname=hostname; }
-  start(ownerId: string): Promise<void> {
+  start(ownerId: string, intentId: string = ''): Promise<void> {
     const want: Want={bundleName:'com.ezoo.tailscaleprobe',abilityName:'VpnProbeAbility',
-      parameters:{vpnMode:'service',ownerId:ownerId,hostname:this.hostname}};
+      parameters:{vpnMode:'service',ownerId:ownerId,hostname:this.hostname,prepareOnly:true,intentId:intentId}};
     return vpnExtension.startVpnExtensionAbility(want);
   }
+  beginHandoff(): void { getAccountSession().beginHandoff(); }
+  finishHandoff(): void { getAccountSession().finishHandoff(); }
+  releaseAccount(): Promise<string> { return getAccountSession().release(); }
   stop(): Promise<void> {
     return vpnExtension.stopVpnExtensionAbility({bundleName:'com.ezoo.tailscaleprobe',abilityName:'VpnProbeAbility'});
   }

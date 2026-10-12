@@ -3,8 +3,11 @@ import { VpnState, readVpnState } from './VpnSessionModel';
 import { readControl } from '../pages/ClientModel';
 
 export interface NetworkClientPort {
-  start(ownerId: string): Promise<void>;
+  start(ownerId: string, intentId?: string): Promise<void>;
   stop(): Promise<void>;
+  beginHandoff(): void;
+  finishHandoff(): void;
+  releaseAccount(): Promise<string>;
   read(): ServiceSnapshot | undefined;
   command(value: ServiceCommand): void;
   connect(): Promise<string>;
@@ -12,6 +15,7 @@ export interface NetworkClientPort {
   closeProxy(): Promise<string>;
   delay(): Promise<void>;
 }
+export class VpnAuthorizationRequired extends Error {}
 export class NetworkServiceError extends Error {
   cleanupConfirmed: boolean;
   constructor(message: string, confirmed: boolean) { super(message);this.cleanupConfirmed=confirmed; }
@@ -20,6 +24,17 @@ export function serviceDeadline<T>(work: Promise<T>, milliseconds: number, label
   return new Promise<T>((resolve,reject) => {
     const timer = setTimeout(() => { reject(new Error(`${label}超时`)); },milliseconds);
     work.then((result:T) => {clearTimeout(timer);resolve(result);},(error:Error) => {clearTimeout(timer);reject(error);});
+  });
+}
+export function cancellableService<T>(work: Promise<T>, current: () => boolean, milliseconds: number, label: string): Promise<T> {
+  return new Promise<T>((resolve,reject) => {
+    const end = Date.now()+milliseconds;
+    const check = setInterval(() => {
+      if (!current() || Date.now()>=end) {
+        clearInterval(check); reject(new Error(!current() ? 'VPN 开启已取消' : `${label}超时`));
+      }
+    },100);
+    work.then((value:T)=>{clearInterval(check);resolve(value);},(e:Error)=>{clearInterval(check);reject(e);});
   });
 }
 function fresh(snapshot: ServiceSnapshot): boolean {
@@ -35,6 +50,7 @@ export class NetworkServiceClient {
   private port: NetworkClientPort;
   private bootstrap: Promise<ServiceSnapshot> | undefined = undefined;
   private sdkPending: number = 0;
+  private connectDeadline: number = 0;
   private mutation: boolean = false;
   private cancelledEnable: number = 0;
   constructor(port: NetworkClientPort) { this.port = port; }
@@ -42,8 +58,8 @@ export class NetworkServiceClient {
   cancelEnable(): void {
     this.cancelledEnable++;
     const owner = this.read();
-    if (owner?.serviceReady) {
-      const c = new ServiceCommand(); c.ownerId = owner.ownerId; c.commandId = nonce();
+    if (owner && (owner.serviceReady || owner.phase === 'handoff_wait')) {
+      const c = new ServiceCommand(); c.ownerId = owner.ownerId; c.commandId = nonce(); c.shutdown = !owner.serviceReady;
       this.port.command(c);
     }
   }
@@ -67,15 +83,18 @@ export class NetworkServiceClient {
     }
     return s;
   }
-  async ensure(progress: (message:string)=>void): Promise<ServiceSnapshot> {
+  async ensure(progress: (message:string)=>void, authorize: boolean = false,
+    current: () => boolean = (): boolean => true, intentId: string = ''): Promise<ServiceSnapshot> {
     if (this.bootstrap) { return this.bootstrap; }
-    this.bootstrap=this.initialize(progress);
+    this.bootstrap=this.initialize(progress,authorize,current,intentId);
     try { return await this.bootstrap; } finally { this.bootstrap=undefined; }
   }
-  private async initialize(progress: (message:string)=>void): Promise<ServiceSnapshot> {
+  private async initialize(progress: (message:string)=>void, authorize: boolean,
+    current: () => boolean, intentId: string): Promise<ServiceSnapshot> {
     if (this.sdkPending>0) { throw new Error('上一次系统操作仍在处理中'); }
+    if(authorize){this.connectDeadline=0;}
     const existing=this.read();
-    if (existing && existing.phase==='stopped' && existing.detached && existing.destroyed && existing.descriptorClosed && !existing.coreAlive) {
+    if (authorize && existing && existing.phase==='stopped' && existing.detached && existing.destroyed && existing.descriptorClosed && !existing.coreAlive) {
       this.sdkPending++;
       const stop = async (): Promise<void> => { try { await this.port.stop(); } finally { this.sdkPending--; } };
       await serviceDeadline(stop(),10000,'清理已停止的服务');
@@ -100,30 +119,46 @@ export class NetworkServiceClient {
         }
       } catch (e) { if (healthyCore || this.sdkPending>0) { throw e as Error; } }
     }
+    if (!authorize) { throw new VpnAuthorizationRequired('需要点击开启 VPN，授权并启动网络服务'); }
+    if (!current()) { throw new Error('VPN 开启已取消'); }
     // Discard only the UI proxy, never the extension owner. The file lease in
     // the native service prevents a second owner if an old process is alive.
     readControl(await this.port.closeProxy());
-    progress('正在请求网络服务授权（授权后仍需开启 VPN 开关）…');
-    this.sdkPending++;
-    const newOwnerId = nonce();
-    const start = async (): Promise<void> => { try { await this.port.start(newOwnerId); } finally { this.sdkPending--; } };
-    const work = start();
-    await serviceDeadline(work,60000,'系统 VPN 服务授权');
-    const deadline=Date.now()+30000;
-    while (Date.now()<deadline) {
-      const s=this.read();
-      if (s && fresh(s)) {
-        if (s.ownerId===newOwnerId && (s.phase==='stopped'||s.phase==='cleanup_pending')) { throw new Error(s.error||'网络服务启动未完成'); }
-        if (s.serviceReady) {
-          readControl(await serviceDeadline(this.port.connect(),10000,'连接网络服务'));
-          const confirmed=await this.observe();
-          if (confirmed?.serviceReady) { return confirmed; }
+    this.port.beginHandoff();
+    try {
+      progress('请在系统提示中允许 VPN…');
+      this.sdkPending++;
+      const newOwnerId = nonce();
+      const start = async (): Promise<void> => { try { await this.port.start(newOwnerId,intentId); } finally { this.sdkPending--; } };
+      await cancellableService(start(),current,60000,'等待系统 VPN 授权');
+      const deadline=Date.now()+30000;this.connectDeadline=deadline;
+      let lastConnectionError = '';
+      let released = false;
+      while (Date.now()<deadline) {
+        if (!current()) { throw new Error('VPN 开启已取消'); }
+        const s=this.read();
+        if (s && s.ownerId===newOwnerId && fresh(s)) {
+          if (s.phase==='stopped'||s.phase==='cleanup_pending') { throw new Error(s.error||'网络服务启动未完成'); }
+          if (s.phase==='handoff_wait' && !released) {
+            progress('正在准备 VPN 服务…');
+            readControl(await serviceDeadline(this.port.releaseAccount(),10000,'转交账号服务'));
+            if (!current()) { throw new Error('VPN 开启已取消'); }
+            const c = new ServiceCommand(); c.ownerId=newOwnerId; c.commandId=nonce();c.handoff=true;c.intentId=intentId;
+            this.port.command(c); released=true;
+          }
+          if (s.serviceReady) {
+            try { readControl(await serviceDeadline(this.port.connect(),5000,'连接本地 VPN 服务')); }
+            catch (e) { lastConnectionError=`${e}`;await this.port.delay();continue; }
+            const confirmed=await this.observe();
+            if (confirmed?.serviceReady) { return confirmed; }
+          }
         }
+        await this.port.delay();
       }
-      await this.port.delay();
-    }
-    throw new Error('等待网络服务就绪超时，账号记录已保留');
+      throw new Error(`本地 VPN 服务启动超时${lastConnectionError ? `：${lastConnectionError}` : ''}`);
+    } finally { this.port.finishHandoff(); }
   }
+
   async setEnabled(enabled:boolean,progress:(message:string)=>void,
     current: () => boolean = (): boolean => true, intentId: string = '', repair: boolean = false): Promise<ServiceSnapshot> {
     if (this.mutation) { throw new Error('网络操作正在处理中'); }
@@ -138,12 +173,13 @@ export class NetworkServiceClient {
       command=new ServiceCommand();command.ownerId=owner.ownerId;command.commandId=nonce();command.enabled=enabled;
       command.intentId = intentId; command.repair = repair;
       this.port.command(command);
-      const deadline=Date.now()+35000;
+      const deadline=enabled&&this.connectDeadline ? Math.min(Date.now()+30000,this.connectDeadline) : Date.now()+30000;
       while (Date.now()<deadline) {
         if (enabled && (!current() || cancellation !== this.cancelledEnable)) { throw new Error('VPN 开启已取消'); }
         const s=this.read();
         if (s && s.ownerId===owner.ownerId && fresh(s)) {
-          progress(enabled?'正在连接 VPN…':'正在关闭 VPN…');
+          progress(!enabled ? '正在关闭 VPN…' : s.phase === 'waiting_core' ? '正在获取本机网络配置…' :
+            s.phase === 'create' ? '正在创建 VPN 网卡…' : s.phase === 'protect' || s.phase === 'attach' ? '正在建立 VPN 连接…' : '正在确认 VPN 状态…');
           if (s.commandId===command.commandId) {
             if (s.phase==='error'||s.phase==='cleanup_pending'||s.phase==='stopped') {
               throw new NetworkServiceError(s.error||'网络服务已停止',s.detached&&s.destroyed&&s.descriptorClosed);
@@ -163,7 +199,7 @@ export class NetworkServiceClient {
         this.port.command(cancel);
       }
       throw e as Error;
-    } finally {this.mutation=false;}
+    } finally {this.mutation=false;this.connectDeadline=0;}
   }
   async shutdown(): Promise<void> {
     if(this.mutation||this.sdkPending>0){throw new Error('网络操作正在处理中');}

@@ -8,7 +8,6 @@ package main
 import "C"
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -35,7 +34,7 @@ func panicResult(operation string, output **C.char) {
 		message := fmt.Sprintf("panic: %v", recovered)
 		stack := string(debug.Stack())
 		appendLog("%s\n%s", message, stack)
-		if operation == "start" || operation == "startService" || operation == "startVpn" || operation == "close" {
+		if operation == "start" || operation == "startService" || operation == "startAccount" || operation == "startVpn" || operation == "close" {
 			lifecycle.Lock()
 			lifecycle.state = "panic"
 			lifecycle.lastError = message
@@ -100,6 +99,18 @@ func tailscale_ohos_start_service(cDataDir, cHostname *C.char) (output *C.char) 
 	return cJSON(startServiceCore(C.GoString(cDataDir), C.GoString(cHostname)))
 }
 
+//export tailscale_ohos_start_account
+func tailscale_ohos_start_account(cDataDir, cHostname *C.char) (output *C.char) {
+	defer panicResult("startAccount", &output)
+	return cJSON(startAccountCore(C.GoString(cDataDir), C.GoString(cHostname)))
+}
+
+//export tailscale_ohos_release_account
+func tailscale_ohos_release_account() (output *C.char) {
+	defer panicResult("releaseAccount", &output)
+	return cJSON(releaseAccountCore())
+}
+
 //export tailscale_ohos_detach_vpn
 func tailscale_ohos_detach_vpn() (output *C.char) {
 	defer panicResult("detachVpn", &output)
@@ -133,16 +144,16 @@ func tailscale_ohos_network_changed() (output *C.char) {
 //export tailscale_ohos_status
 func tailscale_ohos_status() (output *C.char) {
 	defer panicResult("status", &output)
-	operationMu.Lock()
-	defer operationMu.Unlock()
+	operationMu.RLock()
+	defer operationMu.RUnlock()
 	return cJSON(fetchControlStatus("status"))
 }
 
 //export tailscale_ohos_login
 func tailscale_ohos_login() (output *C.char) {
 	defer panicResult("login", &output)
-	operationMu.Lock()
-	defer operationMu.Unlock()
+	operationMu.RLock()
+	defer operationMu.RUnlock()
 
 	server, state, err := currentServer()
 	if err != nil {
@@ -152,7 +163,7 @@ func tailscale_ohos_login() (output *C.char) {
 	if err != nil {
 		return cJSON(controlStatus("login", state, nil, err))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := readContext(15 * time.Second)
 	defer cancel()
 	return cJSON(runLogin(ctx, client, state))
 }

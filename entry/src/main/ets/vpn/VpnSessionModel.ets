@@ -10,6 +10,7 @@ export class VpnState {
   error: string = '';
   debugLogs: string[] = [];
   coreId: string = '';
+  coreHost: string = '';
   coreAlive: boolean = false;
   coreOwner: boolean = false;
   attached: boolean = false;
@@ -38,6 +39,7 @@ export function readVpnState(raw: string): VpnState {
     ![s.txPackets, s.rxPackets, s.txBytes, s.rxBytes].every((n: number) => Number.isFinite(n) && n >= 0) ||
     (s.debugLogs !== undefined && (!Array.isArray(s.debugLogs) || !s.debugLogs.every((line: string) => typeof line === 'string'))) ||
     (s.coreId !== undefined && typeof s.coreId !== 'string') ||
+    (s.coreHost !== undefined && s.coreHost !== '' && s.coreHost !== 'account' && s.coreHost !== 'vpn') ||
     (s.coreAlive !== undefined && typeof s.coreAlive !== 'boolean') ||
     (s.coreOwner !== undefined && typeof s.coreOwner !== 'boolean') ||
     (s.attached !== undefined && typeof s.attached !== 'boolean') ||

@@ -69,11 +69,11 @@ docker run --rm --pull never --network none \
       echo "host descriptor fault-injection hook must not be packaged" >&2
       exit 1
     fi
-    for property in getVersion configurePlatform getStatus getLogs start startService connectService disconnectClient detachVpn login logout onlinePeers diagnostics close inspectVpnDescriptor startVpn getVpnStatus networkChanged tailscale_napi; do
+    for property in getVersion configurePlatform getStatus getLogs start startAccount releaseAccount startService connectService disconnectClient detachVpn login logout onlinePeers diagnostics close inspectVpnDescriptor startVpn getVpnStatus networkChanged tailscale_napi; do
       grep -Fxq "$property" <<<"$napi_strings"
     done
     go_symbols=$(readelf -Ws /verify/libtailscale_ohos.so)
-    for symbol in tailscale_ohos_start tailscale_ohos_start_service tailscale_ohos_connect_service tailscale_ohos_disconnect_client tailscale_ohos_detach_vpn tailscale_ohos_start_vpn tailscale_ohos_vpn_status tailscale_ohos_network_changed tailscale_ohos_status tailscale_ohos_login tailscale_ohos_logout tailscale_ohos_online_peers; do
+    for symbol in tailscale_ohos_start tailscale_ohos_start_account tailscale_ohos_release_account tailscale_ohos_start_service tailscale_ohos_connect_service tailscale_ohos_disconnect_client tailscale_ohos_detach_vpn tailscale_ohos_start_vpn tailscale_ohos_vpn_status tailscale_ohos_network_changed tailscale_ohos_status tailscale_ohos_login tailscale_ohos_logout tailscale_ohos_online_peers; do
       grep -Eq "[[:space:]]${symbol}$" <<<"$go_symbols"
     done
     go_relocations=$(readelf -rW /verify/libtailscale_ohos.so)

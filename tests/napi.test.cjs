@@ -122,7 +122,7 @@ test('wrong argument counts and types are rejected before entering C ABI', () =>
     assert.throws(() => native.startVpn(...args), TypeError);
   }
   for (const args of [[], ['/tmp'], [1, 'host'], ['/tmp', null], ['/tmp', 'a\0b'], ['/tmp\0elsewhere', 'host']]) {
-    for (const method of ['start','startService','connectService']) assert.throws(() => native[method](...args), TypeError);
+    for (const method of ['start','startAccount','startService','connectService']) assert.throws(() => native[method](...args), TypeError);
   }
   for (const fn of ['onlinePeers', 'diagnostics']) {
     assert.throws(() => native[fn](), TypeError);
@@ -147,6 +147,8 @@ test('VPN NAPI startup and independent status use the real async ABI', async () 
 });
 test('async methods return real Promises and the proper operation JSON', async () => {
   for (const [name, args, operation] of [
+    ['startAccount', ['relative', 'host'], 'startAccount'],
+    ['releaseAccount', [], 'releaseAccount'],
     ['startService', ['relative', 'host'], 'startService'],
     ['connectService', ['relative', 'host'], 'connectService'],
     ['detachVpn', [], 'detachVpn'], ['disconnectClient', [], 'disconnectClient'],
@@ -160,7 +162,7 @@ test('async methods return real Promises and the proper operation JSON', async (
     const result = await parse(promise);
     assert.equal(result.operation, operation);
     assert.equal(typeof result.ok, 'boolean');
-    if (real && operation !== 'close' && operation !== 'disconnectClient') assert.equal(result.ok, false);
+    if (real && operation !== 'close' && operation !== 'disconnectClient' && operation !== 'releaseAccount') assert.equal(result.ok, false);
   }
 });
 test('NAPI SDK allocation/queue failures throw and subsequent work recovers', async () => {
@@ -220,5 +222,26 @@ if (!real) {
     assert.ok(text.includes('newest-marker'));
     assert.ok(text.includes('中'));
     assert.ok(bytes.length < 3000);
+  });
+}
+
+if (real) {
+  test('real NAPI foreground account lifecycle is independent of the system VPN extension',async()=>{
+    const dir=fs.mkdtempSync('/tmp/tailscale-account-napi-');
+    try{
+      const started=await parse(native.startAccount(dir,'account-native'));
+      assert.equal(started.ok,true);
+      const before=await parse(native.getVpnStatus());
+      assert.equal(before.coreHost,'account');assert.equal(before.coreAlive,true);
+      assert.equal(before.attached,false);assert.equal(before.connected,false);
+      assert.equal((await parse(native.startService(dir,'account-native'))).ok,false);
+      assert.equal((await parse(native.getVpnStatus())).coreId,before.coreId);
+      assert.equal((await parse(native.releaseAccount())).ok,true);
+      assert.equal((await parse(native.getVpnStatus())).coreAlive,false);
+      assert.equal((await parse(native.startService(dir,'account-native'))).ok,true);
+      const vpn=await parse(native.getVpnStatus());assert.equal(vpn.coreHost,'vpn');assert.equal(vpn.attached,false);
+      assert.equal((await parse(native.releaseAccount())).ok,true);
+      assert.equal((await parse(native.getVpnStatus())).coreId,vpn.coreId);
+    }finally{await native.close();fs.rmSync(dir,{recursive:true,force:true});}
   });
 }

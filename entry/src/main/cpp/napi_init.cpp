@@ -20,6 +20,8 @@ enum class AsyncOperation {
     ConfigurePlatform,
     Start,
     StartService,
+    StartAccount,
+    ReleaseAccount,
     ConnectService,
     DisconnectClient,
     Status,
@@ -144,6 +146,8 @@ const char *OperationName(AsyncOperation operation)
     switch (operation) {
         case AsyncOperation::ConfigurePlatform: return "configurePlatform";
         case AsyncOperation::Start: return "start";
+        case AsyncOperation::StartAccount: return "startAccount";
+        case AsyncOperation::ReleaseAccount: return "releaseAccount";
         case AsyncOperation::StartService: return "startService";
         case AsyncOperation::ConnectService: return "connectService";
         case AsyncOperation::DisconnectClient: return "disconnectClient";
@@ -194,6 +198,12 @@ void ExecuteAsync(napi_env, void *data)
             context->result = TakeGoString(tailscale_ohos_start(
                 const_cast<char *>(context->dataDir.c_str()),
                 const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::StartAccount:
+            context->result = TakeGoString(tailscale_ohos_start_account(const_cast<char *>(context->dataDir.c_str()), const_cast<char *>(context->hostname.c_str())));
+            break;
+        case AsyncOperation::ReleaseAccount:
+            context->result = TakeGoString(tailscale_ohos_release_account());
             break;
         case AsyncOperation::StartService:
             context->result = TakeGoString(tailscale_ohos_start_service(
@@ -338,6 +348,27 @@ napi_value StartService(napi_env env, napi_callback_info info)
         return nullptr;
     }
     return QueueAsync(env, context, "tailscaleStartService");
+}
+
+napi_value StartAccount(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto *context = new AsyncContext();
+    context->operation = AsyncOperation::StartAccount;
+    if (argc != 2 || !ReadString(env, argv[0], context->dataDir) || !ReadString(env, argv[1], context->hostname)) {
+        delete context;
+        napi_throw_type_error(env, nullptr, "startAccount(dir, hostname) requires two strings");
+        return nullptr;
+    }
+    return QueueAsync(env, context, "tailscaleStartAccount");
+}
+
+napi_value ReleaseAccount(napi_env env, napi_callback_info)
+{
+    auto *context = new AsyncContext(); context->operation = AsyncOperation::ReleaseAccount;
+    return QueueAsync(env, context, "tailscaleReleaseAccount");
 }
 
 napi_value DetachVpn(napi_env env, napi_callback_info)
@@ -497,6 +528,8 @@ napi_value Init(napi_env env, napi_value exports)
         {"getStatus", nullptr, GetStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getLogs", nullptr, GetLogs, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"start", nullptr, Start, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"startAccount", nullptr, StartAccount, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"releaseAccount", nullptr, ReleaseAccount, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"startService", nullptr, StartService, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"connectService", nullptr, ConnectService, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"disconnectClient", nullptr, DisconnectClient, nullptr, nullptr, nullptr, napi_default, nullptr},

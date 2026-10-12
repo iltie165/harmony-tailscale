@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/netip"
 	"time"
@@ -10,7 +9,16 @@ import (
 // The product starts the same official backend before attaching any system
 // interface. Existing healthy instances are reused by startWithBackend.
 func startServiceCore(dir, hostname string) operationResult {
-	r := startWithBackend(dir, hostname, func(dir, hostname string) backend {
+	lockMutation()
+	defer operationMu.Unlock()
+	lifecycle.RLock()
+	account, isAccount := lifecycle.server.(*serviceBackend)
+	blocked := isAccount && account.foreground
+	lifecycle.RUnlock()
+	if blocked {
+		return operationResult{Operation: "startService", State: "error", Error: "account host must release ownership before VPN handoff"}
+	}
+	r := startWithBackendLocked(dir, hostname, func(dir, hostname string) backend {
 		return &serviceBackend{dir: dir, hostname: hostname}
 	})
 	r.Operation = "startService"
@@ -18,12 +26,28 @@ func startServiceCore(dir, hostname string) operationResult {
 }
 
 func connectServiceCore(dir, hostname string) operationResult {
-	r := startWithBackend(dir, hostname, func(dir, hostname string) backend { return remoteService(dir) })
+	lockMutation()
+	defer operationMu.Unlock()
+	lifecycle.Lock()
+	if account, ok := lifecycle.server.(*serviceBackend); ok && account.foreground {
+		lifecycle.Unlock()
+		return operationResult{Operation: "connectService", State: "error", Error: "foreground account host retained pending authorization"}
+	}
+	// A refused connection during extension bootstrap is not a failed owner.
+	// Dispose only the failed UI proxy so the next attempt actually dials again.
+	if proxy, ok := lifecycle.server.(*remoteBackend); ok && lifecycle.state == "error" {
+		proxy.Close()
+		lifecycle.server = nil
+		lifecycle.state = "closed"
+		lifecycle.lastError = ""
+	}
+	lifecycle.Unlock()
+	r := startWithBackendLocked(dir, hostname, func(dir, hostname string) backend { return remoteService(dir) })
 	r.Operation = "connectService"
 	return r
 }
 func disconnectServiceClient() operationResult {
-	operationMu.Lock()
+	lockMutation()
 	defer operationMu.Unlock()
 	lifecycle.Lock()
 	defer lifecycle.Unlock()
@@ -49,11 +73,11 @@ func startVpnCore(dir, hostname, address string, fd int) operationResult {
 	if err != nil || !ip.Is4() || !netip.MustParsePrefix("100.64.0.0/10").Contains(ip) || fd < 0 {
 		return operationResult{Operation: "startVpn", State: "error", Error: "VPN requires an assigned Tailnet IPv4 and valid descriptor"}
 	}
-	operationMu.Lock()
+	lockMutation()
 	server, state, currentErr := currentServer()
 	if currentErr == nil {
 		owner, ok := server.(*serviceBackend)
-		if !ok || owner.dir != dir || state != "started" {
+		if !ok || owner.foreground || owner.dir != dir || state != "started" {
 			operationMu.Unlock()
 			return operationResult{Operation: "startVpn", State: "error", Error: "VPN must attach in the authoritative service process"}
 		}
@@ -108,7 +132,7 @@ func (b *serviceBackend) AttachVPN(fd int, ip netip.Addr) error {
 	return nil
 }
 func detachVpnCore() operationResult {
-	operationMu.Lock()
+	lockMutation()
 	defer operationMu.Unlock()
 	server, state, err := currentServer()
 	if err != nil {
@@ -130,14 +154,14 @@ func detachVpnCore() operationResult {
 }
 
 func vpnStateCore() vpnState {
-	operationMu.Lock()
-	defer operationMu.Unlock()
+	operationMu.RLock()
+	defer operationMu.RUnlock()
 	server, _, err := currentServer()
 	if err != nil {
 		return vpnState{OK: true, State: "disconnected"}
 	}
 	if provider, ok := server.(vpnStateProvider); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := readContext(3 * time.Second)
 		defer cancel()
 		return provider.VPNState(ctx)
 	}
@@ -145,7 +169,7 @@ func vpnStateCore() vpnState {
 }
 
 func networkChangedCore() operationResult {
-	operationMu.Lock()
+	lockMutation()
 	defer operationMu.Unlock()
 	server, state, err := currentServer()
 	if err != nil {

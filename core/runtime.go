@@ -27,7 +27,7 @@ var lifecycle = struct {
 }{state: "idle"}
 
 // tsnet documents that Close must not run before or concurrently with Start.
-var operationMu sync.Mutex
+var operationMu sync.RWMutex
 
 var logs = struct {
 	sync.Mutex

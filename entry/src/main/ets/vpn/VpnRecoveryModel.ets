@@ -27,7 +27,7 @@ export class RecoveryBlocked extends Error {
 export interface VpnRecoveryPort {
   readIntent(): VpnIntent | undefined;
   writeIntent(value: VpnIntent): void;
-  recover(intent: VpnIntent, current: () => boolean, progress: (message: string) => void): Promise<void>;
+  recover(intent: VpnIntent, current: () => boolean, progress: (message: string) => void, manual?: boolean): Promise<void>;
   cancel(): void;
   disconnect(): Promise<void>;
   publish(report: RecoveryReport): void;
@@ -93,21 +93,33 @@ export class VpnRecoverySupervisor {
     this.running = true;
     try {
       if (this.task) { await this.task.catch(() => {}); }
-      if (this.intent.revision === next.revision) { await this.check(progress); }
+      if (this.intent.revision === next.revision) { await this.check(progress,true); }
+    }
+    catch (e) {
+      // A failed manual connect is a finished request, not permission for
+      // endless retries. Automatic repair remains for established connections.
+      if (this.intent.revision === next.revision) {
+        const off = new VpnIntent(); off.revision = `${Date.now()}-${Math.floor(Math.random()*1000000000)}`;
+        this.intent = off; this.stop(); this.port.cancel();
+        this.port.writeIntent(off);
+        this.report.phase = 'failed'; this.report.nextRetryAt = 0; this.publish();
+        await this.port.disconnect();
+      }
+      throw e as Error;
     }
     finally { this.schedule(Math.max(1000, this.report.nextRetryAt - Date.now())); }
   }
-  async check(progress: (message: string) => void = (_message: string): void => {}): Promise<void> {
+  async check(progress: (message: string) => void = (_message: string): void => {}, manual: boolean = false): Promise<void> {
     if (this.task) { return this.task; }
     if (!this.intent.enabled || this.suspended || Date.now() < this.report.nextRetryAt) { return; }
     const intent = this.intent;
     const current = (): boolean => this.intent.enabled && this.intent.revision === intent.revision;
-    this.task = this.attempt(intent, current, progress);
+    this.task = this.attempt(intent, current, progress,manual);
     try { await this.task; } finally { this.task = undefined; }
   }
-  private async attempt(intent: VpnIntent, current: () => boolean, progress: (message: string) => void): Promise<void> {
+  private async attempt(intent: VpnIntent, current: () => boolean, progress: (message: string) => void, manual: boolean): Promise<void> {
     try {
-      await this.port.recover(intent, current, progress);
+      await this.port.recover(intent, current, progress,manual);
       if (!current()) { return; }
       if (this.report.interruptedAt) {
         this.report.recoveredAt = Date.now(); this.report.lastRecoveryMs = Math.max(0, Date.now() - this.report.interruptedAt);

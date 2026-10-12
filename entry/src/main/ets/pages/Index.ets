@@ -118,10 +118,12 @@ struct Index {
           if (this.view.awaitingLogin) { this.refreshData(); } else { this.login(); }
         })
       if (this.view.awaitingLogin) {
+        Button('取消等待').backgroundColor(Color.Transparent).fontColor(MUTED)
+          .onClick(() => { this.model.cancelLogin(); })
         Button('重新发起登录').backgroundColor(Color.Transparent).fontColor(BLUE)
           .enabled(!this.view.busy).onClick(() => { this.login(); })
       }
-      Text('首次需授权网络服务；授权后 VPN 开关仍保持关闭。').fontSize(11).fontColor('#8C9DAC')
+      Text('登录只认证账号；开启 VPN 时再请求系统授权。').fontSize(11).fontColor('#8C9DAC')
         .margin({ top: 24, bottom: 12 })
     }.width('100%')
   }
@@ -145,7 +147,7 @@ struct Index {
       this.icon($r('app.media.chevron_right'), 14)
     }.width('100%').padding(16).borderRadius(20).backgroundColor(Color.White)
       .margin({ bottom: 10 }).onClick(() => { this.model.selectedPeer = peer; this.model.notify(); this.model.page = 'detail'; this.model.notify(); })
-      .accessibilityText(`${peerName(peer)}，${osLabel(peer.os || '')}，在线，查看详情`)
+      .accessibilityText(`${peerName(peer)}，${osLabel(peer.os || '')}，${this.view.peersStale ? '上次记录' : '在线'}，查看详情`)
   }
 
   @Builder
@@ -175,29 +177,41 @@ struct Index {
         .backgroundColor('#EDF2F6').borderRadius(24).justifyContent(FlexAlign.Center)
       Column({ space: 6 }) {
         Text('VPN').fontSize(17).fontWeight(FontWeight.Bold).fontColor(INK)
-        Text(this.view.vpnChanging ? '正在切换…' : (this.view.vpnNeedsCleanup ? '关闭待确认' :
-          (this.view.vpn.connected ? '已开启' : (this.view.vpnWanted ?
-            (this.view.recovery.phase === 'blocked' ? '恢复待处理' : '正在自动恢复…') : (this.view.vpn.ok ? '已关闭' : '连接异常')))))
-          .fontSize(13).fontColor(this.view.vpn.connected ? BLUE : MUTED)
+        Text(this.model.vpnLabel()).fontSize(13).fontColor(this.view.vpn.connected ? BLUE : MUTED)
         Text(this.view.vpn.connected ? `发送 ${this.view.vpn.txPackets} 包 · 接收 ${this.view.vpn.rxPackets} 包` : '仅连接 Tailnet IPv4 · 保留普通上网')
           .fontSize(11).fontColor(MUTED)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: this.view.vpnWanted || this.model.vpnRunning() }).enabled(this.model.vpnToggleEnabled())
-        .onChange((enabled: boolean) => { this.setVpn(enabled); })
+      Toggle({ type: ToggleType.Switch, isOn: this.view.vpn.connected }).enabled(!this.view.vpnChanging && this.model.vpnToggleEnabled())
+        .onChange((enabled: boolean) => {
+          if (!this.view.vpnChanging && enabled !== this.view.vpn.connected) { this.setVpn(enabled); }
+        })
         .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })
+    if (this.view.vpnWanted && !this.view.vpn.connected) {
+      Button('取消连接').fontColor(BLUE).backgroundColor('#E3EFFF')
+        .onClick(() => { this.setVpn(false); }).margin({ bottom: 12 })
+    }
+    if (this.model.vpnCanRetry()) {
+      Button('重试连接').fontColor(BLUE).backgroundColor('#E3EFFF').onClick(() => { this.setVpn(true); })
+    }
+    if (this.view.vpnNeedsCleanup) {
+      Button('重试关闭').fontColor(BLUE).backgroundColor('#E3EFFF').onClick(() => { this.setVpn(false); })
+    }
+    if (this.view.vpnMessage) {
+      Text(this.view.vpnMessage).fontSize(13).fontColor(MUTED).width('100%').margin({ bottom: 12 })
+    }
+
     Text(this.view.vpn.networkMapReady ? `本机 IP：${this.view.vpn.assignedIPv4}` :
       `${this.view.status.backendState === 'Running' && this.view.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.model.displayAccount().tailscaleIPs?.join(' · ') || '暂无'}`)
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
       .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
     this.notice()
-    if (this.view.status.backendState !== 'Running' && !this.view.vpn.networkMapReady) {
-      Text(this.view.corePaused ? '网络连接已暂停，账号记录已保留。' : '账号记录已保留，正在核对连接并同步设备…').fontSize(13).fontColor(MUTED)
-        .width('100%').margin({ bottom: 16 })
+    if (this.view.restoringSession) {
+      Text('正在恢复账号信息…').fontSize(13).fontColor(MUTED).width('100%').margin({ bottom: 12 })
     }
     if (this.view.startupPhase === 'failed') {
       Text(this.view.startupError).fontSize(13).fontColor(MUTED).width('100%')
-      Button('重试连接').enabled(!this.view.busy).onClick(() => { this.model.retryStartup(); })
+      Button('重试账号同步').enabled(!this.view.restoringSession).onClick(() => { this.model.retryStartup(); })
         .fontColor(BLUE).backgroundColor('#E3EFFF').margin({ bottom: 16 })
     }
     if (this.view.status.health && this.view.status.health.length > 0) {
@@ -211,7 +225,7 @@ struct Index {
         .backgroundColor(Color.Transparent).height(40).onClick(() => { this.model.showFilter = !this.view.showFilter; this.model.notify(); })
       Button() {
         Row({ space: 5 }) { this.icon($r('app.media.refresh'), 16); Text('刷新').fontSize(12).fontColor(BLUE) }
-      }.backgroundColor(Color.Transparent).height(40).enabled(!this.view.busy).onClick(() => { this.refreshData(); })
+      }.backgroundColor(Color.Transparent).height(40).enabled(!this.view.peersUpdating).onClick(() => { this.refreshData(); })
     }.width('100%').margin({ bottom: 8 })
     if (this.view.showFilter) {
       TextInput({ text: this.view.peerFilter, placeholder: '名称 / tag:server / user:name' })
@@ -225,7 +239,16 @@ struct Index {
     // its non-Observed PeerInfo builder instead of retaining stale text.
     ForEach(this.view.peers, (peer: PeerInfo) => { this.peerCard(peer) },
       (peer: PeerInfo) => `${peer.id}:${JSON.stringify(peer)}`)
-    if (this.view.peers.length === 0 && !this.view.busy) {
+    if (this.view.peersUpdating) {
+      Row({ space: 8 }) {
+        LoadingProgress().width(18).height(18).color(BLUE)
+        Text('正在更新设备…').fontSize(12).fontColor(MUTED)
+      }.width('100%').margin({ bottom: 12 })
+    }
+    if (this.view.peersError) {
+      Text(this.view.peersError).fontSize(12).fontColor(MUTED).width('100%').margin({ bottom: 12 })
+    }
+    if (this.view.peers.length === 0 && !this.view.peersUpdating) {
       Column({ space: 12 }) {
         this.icon($r('app.media.device_desktop'), 36)
         Text(this.view.peersStale ? '设备信息待更新' : (this.view.peerFilter ? '没有匹配的在线设备' : '暂无可见的在线设备'))
@@ -289,7 +312,7 @@ struct Index {
   @Builder
   private diagnosticButton(label: string, operation: string) {
     Button(label).fontSize(13).fontColor(BLUE).backgroundColor('#E3EFFF').borderRadius(14)
-      .width('100%').height(44).enabled(!this.view.busy).onClick(() => { this.diagnostic(operation); })
+      .width('100%').height(44).enabled(!this.view.diagnosticBusy).onClick(() => { this.diagnostic(operation); })
   }
 
   @Builder
@@ -338,33 +361,6 @@ struct Index {
     }
   }
 
-  @Builder
-  private startupOverlay() {
-    Column() {
-      Column({ space: 16 }) {
-        if (this.view.startupPhase === 'checking') {
-          LoadingProgress().width(40).height(40).color(BLUE)
-          Text('正在启动网络服务').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
-          Text(this.view.progress || '正在初始化本地核心…').fontSize(14).fontColor(MUTED)
-            .textAlign(TextAlign.Center)
-          Text('账号和设备信息将在后台更新').fontSize(12).fontColor(MUTED)
-        } else {
-          Text('连接尚未就绪').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
-          Text(this.view.startupError).fontSize(14).fontColor(MUTED).textAlign(TextAlign.Center)
-          Button(this.view.busy ? '正在等待系统操作结束…' : '重试连接').width('100%')
-            .enabled(!this.view.busy).fontColor(Color.White).backgroundColor(BLUE)
-            .onClick(() => { this.model.retryStartup(); })
-          Button('查看诊断').fontColor(BLUE).backgroundColor(Color.Transparent)
-            .onClick(() => { this.model.page = 'diagnostics'; this.model.dismissStartup(); })
-          Button('暂时查看账号与设备').fontColor(MUTED).backgroundColor(Color.Transparent)
-            .onClick(() => { this.model.dismissStartup(); })
-        }
-      }.width('100%').padding(28).backgroundColor(Color.White).borderRadius(24)
-    }.width('100%').height('100%').padding({ left: 24, right: 24, top: this.safeTop, bottom: this.safeBottom })
-      .justifyContent(FlexAlign.Center).backgroundColor('#D9EEF6FC')
-      .onClick(() => {}).accessibilityText(this.view.startupPhase === 'checking' ? '正在初始化本地网络服务' : '本地服务尚未就绪')
-  }
-
   build() {
     Stack() {
     Scroll() {
@@ -377,8 +373,7 @@ struct Index {
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })
     }.width('100%').height('100%').scrollBar(BarState.Off)
       .padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight })
-      .enabled(!this.view.startupBlocking)
-    if (this.view.startupBlocking) { this.startupOverlay() }
+
     }.width('100%').height('100%')
       .backgroundColor('#EEF6FC')
       .linearGradient({ angle: 165, colors: [['#EAF4FF', 0], ['#F6FAFD', 0.6], ['#EEF6FC', 1]] })

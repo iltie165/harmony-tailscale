@@ -52,6 +52,23 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
+### 3.4.0 independent login, devices and VPN consent
+
+Login and account restoration run a permission-free foreground official core,
+or reuse an already healthy VPN host. Only explicit VPN ON requests system
+consent and an exclusive same-identity handoff to the extension. Device queries
+have independent loading/error state; connection has progress/cancel/retry and
+the switch reflects actual interface state. Normal OFF retains the account and
+warm core. See [implementation and acceptance](docs/ui-3.4.0.md).
+
+### 3.3.5 local service bootstrap recovery and dark icon
+
+Local socket refusal during extension bootstrap is retried without restarting
+the owner or clearing credentials. A failed UI proxy is discarded before the
+next dial, and diagnostic service startup releases the failed startup overlay.
+Application/launcher/start-window icons now use the latest supplied original
+dark PNG. See [3.3.5 verification and phone acceptance](docs/ui-3.3.5.md).
+
 ### 3.3.4 supplied icon and local-only startup gate
 
 Application/launcher/start-window icons use the supplied blue artwork. The

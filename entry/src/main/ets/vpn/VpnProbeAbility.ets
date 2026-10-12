@@ -65,7 +65,8 @@ export default class VpnProbeAbility extends VpnExtensionAbility {
     }
     try {
       const port = new PlatformNetworkService(vpnExtension.createVpnConnection(this.context),this.context.filesDir,hostname);
-      await this.service.run(port,ownerId);
+      await this.service.run(port,ownerId,want.parameters?.prepareOnly === true,
+        typeof want.parameters?.intentId === 'string' ? want.parameters.intentId : '');
     } catch (_error) { hilog.error(0x5453,'TailscaleVPN','Network service actor terminated'); }
   }
 

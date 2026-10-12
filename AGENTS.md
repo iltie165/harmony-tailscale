@@ -4,11 +4,15 @@
 
 - Read target code before editing. Do not change host packages, Docker images,
   signing configuration, module versions or upstream sources implicitly.
-- Pinned upstream is `tailscale.com v1.86.2`. Product login/discovery/VPN all use
-  one extension-owned official wgengine/ipnlocal core. Its permanent logical
+- Pinned upstream is `tailscale.com v1.86.2`. Product login/discovery uses a
+  permission-free foreground official
+  wgengine/ipnlocal core until an explicit VPN ON authorizes a two-phase
+  transfer to the extension. At most one host owns the saved state. A healthy
+  extension is reused for queries; normal ON/OFF retains that core. Its logical
   TUN attaches/detaches duplicated platform FDs without replacing the engine.
   Legacy tsnet exports remain for ABI compatibility/probes only. A state
-  lease prevents duplicate owners; UI uses the owner's private Unix LocalAPI.
+  lease prevents duplicate owners; UI queries use the current host's private
+  Unix LocalAPI.
   Fakes and permissive test-only packet filters are confined to tests.
 - `core/main.go`: C exports, owned-string conversion, panic recovery. No business
   state machine here. `login.go`: IPN flow; `operations.go`: lifecycle/queries;
@@ -26,7 +30,8 @@
   inferred from authentication. VPN ON requires the real interface, process
   protection and owner's independent state; cleanup failures remain visible.
   Normal OFF never releases the state lease or stops the extension/core. Only
-  confirmed core failure or deliberate service shutdown permits replacement.
+  confirmed core failure, authorized foreground-to-extension handoff or
+  deliberate service shutdown permits replacement.
   Page disposal releases observers, not accepted service commands. Go owns
   only a duplicated FD; never rely on fstat on a phone VPN descriptor.
 - Recovery intent lives independently of service generations and display

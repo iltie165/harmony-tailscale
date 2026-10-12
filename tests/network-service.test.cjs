@@ -177,7 +177,7 @@ test('snapshot storage failure cannot skip actual descriptor and network cleanup
 
 function clientHarness(overrides={}) {
   const calls=[];let snapshot=Object.assign(new model.ServiceSnapshot(),{ownerId:'1-2',coreId:'9-9',coreAlive:true,serviceReady:true,phase:'idle',timestamp:Date.now()});
-  const port={start:async id=>{calls.push('sdkStart');snapshot.ownerId=id;},stop:async()=>{calls.push('sdkStop');},
+  const port={beginHandoff:()=>{},finishHandoff:()=>{},releaseAccount:async()=>'{"ok":true}',start:async id=>{calls.push('sdkStart');snapshot.ownerId=id;},stop:async()=>{calls.push('sdkStop');},
     read:()=>snapshot,connect:async()=>{calls.push('connect');return '{"ok":true}';},closeProxy:async()=>{calls.push('closeProxy');return '{"ok":true}';},
     status:async()=>JSON.stringify(Object.assign(new vpn.VpnState(),{coreAlive:snapshot.coreAlive,coreId:snapshot.coreId,connected:snapshot.connected,
       attached:snapshot.connected,state:snapshot.state,ipv4:snapshot.ipv4})),delay:turn,
@@ -193,9 +193,44 @@ test('client reuses a healthy existing core; normal OFF issues no SDK stop/start
   assert.equal(h.snapshot.coreId,'9-9');assert.equal(h.snapshot.coreAlive,true);
 });
 
+test('old ready snapshot and refused socket wait for the listener without repeated SDK starts',async()=>{
+  let attempts=0,delays=0,ownerId;
+  const h=clientHarness({
+    start:async id=>{h.calls.push('sdkStart');ownerId=id;},
+    connect:async()=>{h.calls.push('connect');attempts++;return attempts<4?
+      '{"ok":false,"error":"dial unix /private/tailscale/vpn.sock: connect: connection refused"}':'{"ok":true}';},
+    delay:async()=>{delays++;Object.assign(h.snapshot,{ownerId,coreId:'11-12',timestamp:Date.now()});await turn();}
+  });
+  const [first,second]=await Promise.all([h.client.ensure(()=>{},true),h.client.ensure(()=>{},true)]);
+  assert.equal(first.coreId,'11-12');assert.equal(second.coreId,first.coreId);
+  assert.equal(attempts,4);assert.equal(delays,3);
+  assert.equal(h.calls.filter(x=>x==='sdkStart').length,1);
+  assert.ok(!h.calls.includes('sdkStop'));
+  assert.ok(!h.calls.some(Array.isArray));
+});
+
+test('permanently refused socket stays failed after bounded retry and preserves diagnostic cause',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+  const h=clientHarness({
+    connect:async()=>'{"ok":false,"error":"vpn.sock: connection refused"}',
+    delay:async()=>{h.snapshot.timestamp=Date.now();t.mock.timers.tick(10000);await turn();}
+  });
+  await assert.rejects(h.client.ensure(()=>{},true),/本地.*服务.*超时.*connection refused/);
+  assert.equal(h.client.pending(),false);
+  assert.equal(h.calls.filter(x=>x==='sdkStart').length,1);
+  assert.ok(!h.calls.includes('sdkStop'));assert.ok(!h.calls.some(Array.isArray));
+});
+
+test('new owner startup error is surfaced without retrying a stopped core',async()=>{
+  const h=clientHarness({start:async id=>{Object.assign(h.snapshot,{ownerId:id,serviceReady:false,phase:'stopped',error:'core startup failed'});}});
+  h.port.connect=async()=>'{"ok":false,"error":"connection refused"}';
+  await assert.rejects(h.client.ensure(()=>{},true),/core startup failed/);
+});
+
 test('confirmed stopped generation is replaced once and accepts a fresh recovery intent',async()=>{
   const h=clientHarness();Object.assign(h.snapshot,{phase:'stopped',coreAlive:false,serviceReady:false,stopReason:'system_destroyed'});
   h.port.start=async id=>{h.calls.push('sdkStart');Object.assign(h.snapshot,{ownerId:id,coreId:'11-12',coreAlive:true,serviceReady:true,phase:'idle',timestamp:Date.now()});};
+  await h.client.ensure(()=>{},true,()=>true,'7-8');
   const result=await h.client.setEnabled(true,()=>{},()=>true,'7-8');
   assert.equal(result.connected,true);assert.equal(result.coreId,'11-12');
   assert.equal(h.calls.filter(x=>x==='sdkStart').length,1);assert.equal(h.calls.filter(x=>x==='sdkStop').length,1);
@@ -204,8 +239,8 @@ test('confirmed stopped generation is replaced once and accepts a fresh recovery
 test('OFF during pending SDK bootstrap fences ON before publishing an enable command',async()=>{
   let release,available=false;
   const h=clientHarness({read:()=>available?h.snapshot:undefined,start:()=>new Promise(resolve=>{release=()=>{available=true;h.snapshot.timestamp=Date.now();resolve();};})});
-  const opening=h.client.setEnabled(true,()=>{});const rejected=assert.rejects(opening,/取消/);
-  await turn();h.client.cancelEnable();release();await rejected;
+  let current=true;const opening=h.client.ensure(()=>{},true,()=>current,'7-8');const rejected=assert.rejects(opening,/取消/);
+  await turn();current=false;h.client.cancelEnable();release();await rejected;
   assert.ok(!h.calls.some(x=>Array.isArray(x)&&x[0]==='command'&&x[1]));
   assert.equal(h.snapshot.connected,false);assert.equal(h.snapshot.coreAlive,true);
 });
@@ -237,9 +272,9 @@ test('concurrent client mutations are rejected and timed-out ON publishes an OFF
 });
 
 test('late service authorization retains an SDK lease until it settles, then reuses the idle service',async t=>{
-  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});let release,available=false;
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date'],now:1000});let release,available=false;
   const h=clientHarness({read:()=>available?h.snapshot:undefined,start:()=>new Promise(resolve=>{release=()=>{available=true;h.snapshot.timestamp=Date.now();resolve();};})});
-  const first=assert.rejects(h.client.ensure(()=>{}),/授权.*超时/);await turn();t.mock.timers.tick(60001);await first;
+  const first=assert.rejects(h.client.ensure(()=>{},true),/授权.*超时/);await turn();t.mock.timers.tick(60001);await first;
   assert.equal(h.client.pending(),true);await assert.rejects(h.client.ensure(()=>{}),/仍在处理中/);
   release();await turn();assert.equal(h.client.pending(),false);await h.client.ensure(()=>{});
 });
@@ -249,4 +284,74 @@ test('schema rejects inconsistent connected reports and non-string owner/command
   assert.throws(()=>model.readServiceSnapshot(JSON.stringify({...snapshot,connected:true,state:'connected',ipv4:'100.64.1.1'})));
   assert.throws(()=>model.readServiceCommand(JSON.stringify({version:1,ownerId:123,commandId:'1-2',enabled:true,shutdown:false})));
   assert.throws(()=>model.readServiceCommand(JSON.stringify({version:1,ownerId:'1-2',commandId:'1-3',enabled:'true',shutdown:false})));
+});
+
+test('cold recovery without a user action cannot request system VPN authorization',async()=>{
+  const h=clientHarness({read:()=>undefined});
+  await assert.rejects(h.client.ensure(()=>{}),clients.VpnAuthorizationRequired);
+  assert.ok(!h.calls.includes('sdkStart'));assert.ok(!h.calls.includes('closeProxy'));
+});
+
+test('authorized preparation releases the account only after new-owner acknowledgment, before boot',async()=>{
+  let available=false;
+  const h=clientHarness({
+    read:()=>available?h.snapshot:undefined,
+    start:async(id)=>{h.calls.push('sdkStart');available=true;Object.assign(h.snapshot,{ownerId:id,phase:'handoff_wait',coreAlive:false,serviceReady:false});},
+    releaseAccount:async()=>{h.calls.push('releaseAccount');assert.equal(h.snapshot.phase,'handoff_wait');return '{"ok":true}';},
+    command:c=>{h.calls.push('handoff');assert.equal(c.handoff,true);assert.equal(c.enabled,false);assert.equal(c.intentId,'7-8');
+      Object.assign(h.snapshot,{phase:'idle',coreAlive:true,serviceReady:true,coreId:'11-12'});}
+  });
+  const result=await h.client.ensure(()=>{},true,()=>true,'7-8');
+  assert.equal(result.coreId,'11-12');
+  assert.ok(h.calls.indexOf('sdkStart')<h.calls.indexOf('releaseAccount'));
+  assert.ok(h.calls.indexOf('releaseAccount')<h.calls.indexOf('handoff'));
+  assert.ok(h.calls.indexOf('handoff')<h.calls.indexOf('connect'));
+});
+
+test('refused authorization retains the account core and sends no handoff or enable',async()=>{
+  let releases=0;
+  const h=clientHarness({read:()=>undefined,start:async()=>{throw new Error('permission denied');},releaseAccount:async()=>{releases++;return '{"ok":true}';}});
+  await assert.rejects(h.client.ensure(()=>{},true,()=>true,'7-8'),/denied/);
+  assert.equal(releases,0);assert.ok(!h.calls.some(Array.isArray));assert.equal(h.client.pending(),false);
+});
+
+test('preparation actor ignores wrong generations/revisions and never boots until release acknowledgment',async()=>{
+  const actor=new model.NetworkServiceActor();let command,snapshot,boots=0,closes=0;
+  const intent=Object.assign(new recovery.VpnIntent(),{enabled:true,revision:'7-8'});
+  const port={orphanedNetwork:()=>false,intent:()=>intent,request:()=>command,publish:s=>{snapshot={...s};},delay:turn,
+    boot:async()=>{boots++;return '{"ok":true}';},status:async()=>JSON.stringify({...new vpn.VpnState(),coreAlive:true,coreOwner:true,coreId:'11-12'}),
+    closeCore:async()=>{closes++;return '{"ok":true}';}};
+  const task=actor.run(port,'1-2',true,'7-8');
+  await until(()=>snapshot?.phase==='handoff_wait');assert.equal(boots,0);
+  command=Object.assign(new model.ServiceCommand(),{ownerId:'9-9',commandId:'3-4',handoff:true,intentId:'7-8'});await turn();await turn();assert.equal(boots,0);
+  command.ownerId='1-2';command.intentId='8-9';await turn();await turn();assert.equal(boots,0);
+  command.intentId='7-8';await until(()=>snapshot.serviceReady);assert.equal(boots,1);
+  actor.cancel();await task;assert.equal(closes,1);
+});
+
+test('late authorized actor after cancellation neither touches credentials nor creates a VPN',async()=>{
+  const actor=new model.NetworkServiceActor();let snapshot,boots=0,closes=0;
+  const intent=Object.assign(new recovery.VpnIntent(),{enabled:false,revision:'9-10'});
+  const port={orphanedNetwork:()=>false,intent:()=>intent,request:()=>undefined,publish:s=>{snapshot={...s};},delay:turn,
+    boot:async()=>{boots++;return '{"ok":true}';},closeCore:async()=>{closes++;return '{"ok":true}';}};
+  await actor.run(port,'1-2',true,'7-8');
+  assert.equal(boots,0);assert.equal(closes,0);assert.equal(snapshot.phase,'stopped');assert.equal(snapshot.serviceReady,false);
+});
+
+test('failed account release cannot grant the extension access to credential state',async()=>{
+  let available=false;
+  const h=clientHarness({read:()=>available?h.snapshot:undefined,
+    start:async id=>{available=true;Object.assign(h.snapshot,{ownerId:id,phase:'handoff_wait',coreAlive:false,serviceReady:false});},
+    releaseAccount:async()=>'{"ok":false,"error":"account shutdown unconfirmed"}'});
+  await assert.rejects(h.client.ensure(()=>{},true,()=>true,'7-8'),/unconfirmed/);
+  assert.ok(!h.calls.some(Array.isArray));assert.equal(h.snapshot.serviceReady,false);
+});
+
+test('rejected extension boot cannot close an existing foreground account owner',async()=>{
+  let closed=0,snapshot;
+  const actor=new model.NetworkServiceActor();
+  const port={orphanedNetwork:()=>false,publish:s=>{snapshot={...s};},
+    boot:async()=>'{"ok":false,"error":"account host must release ownership before VPN handoff"}',
+    closeCore:async()=>{closed++;return '{"ok":true}';}};
+  await actor.run(port,'1-2');assert.equal(closed,0);assert.equal(snapshot.phase,'stopped');assert.match(snapshot.error,/release ownership/);
 });

@@ -10,6 +10,7 @@ import { ControlResult, PeerInfo, readControl, readPeers, isAuthenticated,
   accountName, tailnetName, peerName, peerAddress, osLabel, safeOutput } from './ClientModel';
 import { SessionPreview, SessionPreviewStore, previewOf } from './SessionPreview';
 import { readPlatformInfo } from './PlatformInfo';
+import { getAccountSession } from './AccountSessionPlatform';
 
 import { fileIo } from '@kit.CoreFileKit';
 import { NetworkServiceClient, NetworkServiceError, serviceDeadline } from '../vpn/NetworkServiceClient';
@@ -24,6 +25,11 @@ export class ClientView {
   selectedPeer: PeerInfo | undefined = undefined;
   output: string = '';
   busy: boolean = false;
+  peersUpdating: boolean = false;
+  peersError: string = '';
+  vpnProgress: string = '';
+  vpnMessage: string = '';
+  diagnosticBusy: boolean = false;
   progress: string = '';
   message: string = '';
   hostname: string = 'harmony-tsnet';
@@ -53,6 +59,11 @@ export class ClientController {
   public selectedPeer: PeerInfo | undefined = undefined;
   public output: string = '';
   public busy: boolean = false;
+  public peersUpdating: boolean = false;
+  public peersError: string = '';
+  public vpnProgress: string = '';
+  public vpnMessage: string = '';
+  public diagnosticBusy: boolean = false;
   public progress: string = '';
   public message: string = '';
   public hostname: string = 'harmony-tsnet';
@@ -83,12 +94,16 @@ export class ClientController {
   private restoreDeadline: number = 0;
   private foreground: boolean = true;
   private mounted: boolean = false;
+  private dataEpoch: number = 0;
+  private vpnSequence: number = 0;
+  private vpnStopping: boolean = false;
+  private accountStarting: boolean = false;
   private refreshTask: Promise<void> | undefined = undefined;
   private previewStore: SessionPreviewStore | undefined = undefined;
   private persistedPreview: string = '';
   private foregroundCallback = (_event: emitter.EventData): void => {
     this.foreground = true;
-    if (!this.busy && !this.corePaused && this.hasAccount()) { this.recoverForeground(); }
+    if (!this.busy && !this.corePaused && (this.hasAccount() || this.awaitingLogin)) { this.recoverForeground(); }
   };
   private backgroundCallback = (_event: emitter.EventData): void => {
     this.foreground = false; this.stopPolling();
@@ -140,13 +155,19 @@ export class ClientController {
   }
 
   hasAccount(): boolean { return isAuthenticated(this.status) || this.previewAccount.self !== undefined; }
-  startupBlocking(): boolean { return !this.startupDismissed && this.startupPhase !== 'ready'; }
+  startupBlocking(): boolean { return false; }
   vpnToggleEnabled(): boolean {
-    return !this.busy && !this.vpnChanging && (this.vpnWanted() || this.vpnRunning() ||
-      (this.startupPhase === 'ready' && !this.corePaused && this.vpn.networkMapReady &&
-        tailnetIPv4(this.vpn.assignedIPv4)) ||
-      (!this.corePaused && this.startupPhase === 'ready' && isAuthenticated(this.status) &&
-        this.status.backendState === 'Running' && this.status.tailscaleIPs?.some(tailnetIPv4) === true));
+    if (this.vpnWanted() || this.vpnRunning()) { return !this.vpnStopping; }
+    return !this.busy && !this.vpnChanging && this.hasAccount() && !this.corePaused &&
+      this.status.backendState !== 'NeedsLogin' && this.status.backendState !== 'NeedsMachineAuth';
+  }
+  vpnLabel(): string {
+    if (this.vpnStopping) { return '正在关闭 VPN…'; }
+    if (this.vpnChanging) { return this.vpnProgress || '正在连接 VPN…'; }
+    if (this.vpnNeedsCleanup) { return '关闭待确认'; }
+    if (this.vpn.connected) { return '已开启'; }
+    if (this.vpnWanted()) { return this.recovery.phase === 'blocked' ? '需要重新连接' : '正在恢复连接…'; }
+    return this.recovery.phase === 'failed' ? '连接失败' : '未开启';
   }
   private stopStartupTimer(): void {
     if (this.startupTimer !== -1) { clearTimeout(this.startupTimer); this.startupTimer = -1; }
@@ -188,14 +209,12 @@ export class ClientController {
     this.savePreview();
   }
   connectionLabel(): string {
-    if (this.corePaused) { return '账号已保留 · 网络连接已暂停'; }
-    if (this.vpn.networkMapReady && this.status.backendState !== 'Running') {
-      return this.vpn.connected ? 'VPN 已开启 · 通路状态同步中' : '网络配置已就绪 · VPN 未开启';
-    }
-    if (!isAuthenticated(this.status)) { return '已保存账号 · 正在核对连接状态'; }
-    if (this.status.backendState !== 'Running') { return '账号已保留 · 正在连接'; }
-    return this.vpnWanted() || this.vpnRunning() ? (this.vpn.connected ? '已登录 · VPN 已开启' :
-      (this.recovery.phase === 'blocked' ? '已登录 · VPN 恢复待处理' : '已登录 · VPN 正在恢复')) : '已登录 · VPN 未开启';
+    if(this.corePaused){return '账号已保留 · 同步已暂停';}
+    if (this.vpn.connected) { return 'VPN 已开启'; }
+    if (this.vpnWanted()) { return this.recovery.phase === 'blocked' ? 'VPN 需要重新连接' : 'VPN 正在恢复'; }
+    if (isAuthenticated(this.status)) { return '已登录 · VPN 未开启'; }
+    if (this.hasAccount()) { return '已保存账号 · VPN 未开启'; }
+    return this.awaitingLogin ? '等待浏览器认证' : '尚未登录';
   }
 
   displayHealth(): string[] {
@@ -245,7 +264,7 @@ export class ClientController {
       if (JSON.stringify(nextAccount) !== JSON.stringify(this.previewAccount)) { this.previewAccount = nextAccount; }
       this.savePreview();
     }
-    if (isAuthenticated(result) && result.backendState === 'Running') {
+    if (isAuthenticated(result)) {
       if (result.tailscaleIPs?.some(tailnetIPv4)) { this.completeStartup(); }
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
@@ -254,6 +273,8 @@ export class ClientController {
   }
 
   async loadData(silent: boolean = false): Promise<void> {
+    const epoch = this.dataEpoch;
+    const filter = this.peerFilter.trim();
     let nextVpn: VpnState;
     if (this.networkStarted && this.network) {
       const snapshot = await this.network.observe();
@@ -262,7 +283,7 @@ export class ClientController {
       if (this.mounted) { this.vpnNeedsCleanup = (snapshot.phase === 'cleanup_pending' || snapshot.phase === 'error') &&
         (!snapshot.detached || !snapshot.destroyed || !snapshot.descriptorClosed); }
     } else { nextVpn = readVpnState(await tailscale.getVpnStatus()); }
-    if (!this.mounted) { return; }
+    if (!this.mounted || epoch !== this.dataEpoch) { return; }
     // Logs change independently of product state; don't redraw the dashboard
     // merely because the native log ring changed. Diagnostics fetch them on demand.
     if (this.vpn.ok !== nextVpn.ok || this.vpn.connected !== nextVpn.connected ||
@@ -270,18 +291,19 @@ export class ClientController {
       this.vpn.txPackets !== nextVpn.txPackets || this.vpn.rxPackets !== nextVpn.rxPackets ||
       this.vpn.txBytes !== nextVpn.txBytes || this.vpn.rxBytes !== nextVpn.rxBytes ||
       this.vpn.error !== nextVpn.error || this.vpn.coreId !== nextVpn.coreId ||
-      this.vpn.coreAlive !== nextVpn.coreAlive || this.vpn.attached !== nextVpn.attached ||
+      this.vpn.coreHost !== nextVpn.coreHost || this.vpn.coreAlive !== nextVpn.coreAlive || this.vpn.attached !== nextVpn.attached ||
       this.vpn.networkMapReady !== nextVpn.networkMapReady || this.vpn.assignedIPv4 !== nextVpn.assignedIPv4) { this.vpn = nextVpn; }
     if (!this.vpn.ok) { throw new Error(this.vpn.error || 'VPN service unavailable'); }
     this.notify();
     const raw: string = await serviceDeadline(tailscale.getStatus(), 5000, '读取本地账号状态');
-    if (!this.mounted) { return; }
+    if (!this.mounted || epoch !== this.dataEpoch) { return; }
     if (!silent) { this.output = safeOutput(raw); }
     this.applyStatus(readControl(raw));
     if (this.vpn.networkMapReady || (isAuthenticated(this.status) && this.status.backendState === 'Running')) {
-      const peerRaw: string = await tailscale.onlinePeers(this.peerFilter.trim());
-      if (!this.mounted) { return; }
+      const peerRaw: string = await serviceDeadline(tailscale.onlinePeers(filter),5000,'读取设备列表');
+      if (!this.mounted || epoch !== this.dataEpoch) { return; }
       if (!silent) { this.output = safeOutput(peerRaw); }
+      if (filter !== this.peerFilter.trim()) { return; }
       const nextPeers = readPeers(peerRaw);
       const changed = JSON.stringify(this.peers) !== JSON.stringify(nextPeers);
       if (changed) {
@@ -323,115 +345,85 @@ export class ClientController {
 
 
   async setVpn(enabled: boolean): Promise<void> {
-    if (enabled && this.startupPhase !== 'ready') {
-      this.message = '连接尚未准备完成，请等待或重试连接。'; this.notify(); return;
+    // OFF is also cancellation and must bypass an outstanding ON/read.
+    if (!enabled && this.vpnStopping) { return; }
+    if (enabled && (this.busy || this.vpnChanging)) { return; }
+    if(enabled&&this.vpnNeedsCleanup){this.vpnMessage='请先重试关闭，确认旧网卡清理完成';this.notify();return;}
+    if (enabled && !this.hasAccount()) { this.vpnMessage='请先登录 Tailscale';this.notify();return; }
+    if (enabled && (this.status.backendState === 'NeedsLogin' || this.status.backendState === 'NeedsMachineAuth')) {
+      this.vpnMessage = this.status.backendState === 'NeedsMachineAuth' ? '设备需要管理员批准' : '登录已失效，请重新登录';this.notify();return;
     }
-    if (this.busy || this.vpnChanging || (enabled === this.vpnWanted() && !this.vpnNeedsCleanup &&
-      (enabled ? this.vpn.connected : !this.vpnRunning()))) { return; }
-    this.busy = true; this.vpnChanging = true; this.message = ''; this.notify();
+    if (enabled && this.vpn.connected && this.vpnWanted()) { return; }
+    const sequence=++this.vpnSequence; this.dataEpoch++;
+    this.vpnChanging=true;this.vpnStopping=!enabled;this.vpnMessage='';
+    this.vpnProgress=enabled?'正在准备连接…':'正在关闭 VPN…';this.notify();
+    this.networkClient();
     try {
-      // OFF must revoke recovery before waiting for an unrelated peer refresh.
-      if (!enabled) { await this.disconnectVpn(); }
-      if (!this.mounted) { return; }
-      if (enabled && !this.hasAccount() && !this.vpn.networkMapReady) { throw new Error('请先完成登录'); }
-      this.networkClient();
-      if (enabled) { await this.supervisor?.setWanted(true, (message: string) => {
-        if (this.mounted) { this.progress = message; this.notify(); }
-      }); }
-      if (!this.mounted) { return; }
-      this.corePaused = false;
-      this.vpnNeedsCleanup = false;
-      this.message = enabled ? 'VPN 已开启。' : 'VPN 已关闭，核心和登录已保留。';
-      try { await this.loadData(true); }
-      catch (e) { if (this.mounted) { this.peersStale = true; this.message += `设备同步暂未完成：${e}`; } }
-    } catch (e) {
-      if (this.mounted) {
-        this.vpnNeedsCleanup = e instanceof NetworkServiceError ? !e.cleanupConfirmed : false;
-        if (this.vpnNeedsCleanup) {
-          const uncertain = new VpnState();
-          uncertain.ok=false;uncertain.state='error';uncertain.error=`${e}`;
-          uncertain.coreId=this.vpn.coreId;uncertain.coreAlive=this.vpn.coreAlive;
-          uncertain.ipv4=this.vpn.ipv4;uncertain.attached=this.vpn.attached;this.vpn=uncertain;
-        }
-        this.message = enabled && this.vpnWanted() ? `VPN 暂未连接：${e}；${this.recovery.phase === 'blocked' ? '自动恢复已暂停' : '将自动重试'}` : `VPN 操作失败：${e}`;
-        if (this.vpnNeedsCleanup) { this.message += '；关闭状态待确认，请重试关闭或检查系统 VPN 设置。'; }
-        // A live authentication result, never the display cache, can revoke the view.
-        try { this.applyStatus(readControl(await tailscale.getStatus())); } catch (_error) {}
+      await this.supervisor?.setWanted(enabled,(message:string)=>{
+        if(this.mounted && sequence===this.vpnSequence){this.vpnProgress=message;this.notify();}
+      });
+      if (sequence!==this.vpnSequence) { return; }
+      this.corePaused=false;this.vpnNeedsCleanup=false;
+      this.vpnMessage=enabled?'VPN 已开启。':'VPN 已关闭，账号已保留。';
+    } catch(e) {
+      if(sequence!==this.vpnSequence){return;}
+      this.vpnNeedsCleanup=e instanceof NetworkServiceError && !e.cleanupConfirmed;
+      this.vpnMessage=`${enabled?'连接失败':'关闭失败'}：${e}`;
+      if(this.vpnNeedsCleanup){this.vpnMessage+='；关闭状态待确认，可重试关闭。';}
+      if (enabled && !this.vpnWanted() && !this.vpnNeedsCleanup) {
+        try { await this.ensureAccount();
+          const raw: string=await serviceDeadline<string>(tailscale.getStatus(),5000,'确认账号状态');
+          if(this.mounted&&sequence===this.vpnSequence){this.applyStatus(readControl(raw));}
+        } catch(_restoreError) { /* Keep display; exclusive lease still protects credentials. */ }
       }
     } finally {
-      this.busy = false; this.vpnChanging = false;
-      if (this.mounted) {
-        this.scheduleLoginRefresh(); this.scheduleVpnRefresh(); this.notify();
+      if(sequence===this.vpnSequence){
+        this.vpnChanging=false;this.vpnStopping=false;this.vpnProgress='';
+        if(this.mounted){this.scheduleVpnRefresh();this.notify();this.refreshData(true);}
       }
     }
   }
 
   async restoreSession(): Promise<void> {
-    if (this.corePaused) { this.restoringSession = false; this.completeStartup(); this.notify(); return; }
-    this.beginStartup();
-    this.restoringSession = true;
+    if(this.accountStarting){return;}
+    if (this.corePaused) { this.restoringSession=false;this.completeStartup();this.notify();return; }
+    this.accountStarting=true;this.beginStartup();this.restoringSession=true;
     if (this.appContext) {
-      this.previewStore = new SessionPreviewStore(this.appContext.filesDir);
-      const saved = this.previewStore.read();
-      if (saved) {
-        this.previewAccount = saved.account; this.peers = saved.peers;
-        this.lastUpdated = saved.updatedAt; this.peersStale = true;
-        this.persistedPreview = JSON.stringify(saved);
-        this.notify();
-        // The first frame can display saved metadata while native startup runs.
-        this.restoringSession = false;
-      }
+      this.previewStore=new SessionPreviewStore(this.appContext.filesDir);
+      const saved=this.previewStore.read();
+      if(saved){this.previewAccount=saved.account;this.peers=saved.peers;this.lastUpdated=saved.updatedAt;
+        this.peersStale=true;this.persistedPreview=JSON.stringify(saved);this.notify();}
     }
-    let savedState = false;
-    try { savedState = fileIo.accessSync(`${this.dataDir}/tailscaled.state`); } catch (_error) {}
-    if (!this.hasAccount() && !savedState && !this.networkPort?.read()?.serviceReady) {
-      this.completeStartup();
-      this.restoringSession = false; this.busy = false; this.restoreDeadline = 0; this.notify(); return;
+    let savedState=false;
+    try{savedState=fileIo.accessSync(`${this.dataDir}/tailscaled.state`);}catch(_error){}
+    if(!this.hasAccount()&&!savedState&&!this.networkPort?.read()?.serviceReady){
+      this.completeStartup();this.restoringSession=false;this.accountStarting=false;this.notify();return;
     }
-    this.busy = true;
-    this.restoreDeadline = Date.now() + 15000;
-    this.progress = '正在恢复网络服务…'; this.notify();
-    try {
-      await this.ensureService();
-      if (!this.mounted) { return; }
-      // The overlay covers local bootstrap only, not a remote control/DERP
-      // handshake. Account and device updates run independently below.
-      this.completeStartup();
-    } catch (error) {
-      if (this.mounted) {
-        this.restoreDeadline = 0;
-        this.peersStale = true;
-        this.message = `恢复状态失败：${error}`;
-        this.failStartup(this.message);
-      }
-    } finally {
-      this.busy = false;
-      if (this.mounted) { this.restoringSession = false; this.scheduleLoginRefresh(); this.notify(); }
+    this.restoreDeadline=Date.now()+15000;this.notify();
+    try{
+      await this.ensureAccount();
+      if(this.mounted){this.completeStartup();}
+    }catch(e){
+      if(this.mounted){this.peersStale=true;this.message=`账号服务恢复失败：${e}`;this.failStartup(this.message);}
+    }finally{
+      this.accountStarting=false;
+      if(this.mounted){this.restoringSession=false;this.scheduleLoginRefresh();this.notify();}
     }
-    if (this.mounted && this.startupPhase === 'ready') { await this.refreshData(true); }
+    if(this.mounted&&this.startupPhase==='ready'){await this.refreshData(true);}
   }
 
   async refreshData(silent: boolean = false): Promise<void> {
-    if (this.busy || !this.mounted) { return; }
-    if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); return; }
-    if (!silent) {
-      this.busy = true;
-      this.progress = '正在更新状态与设备…';
-      this.message = ''; this.notify();
-    }
-    this.refreshTask = this.loadData(silent);
-    try { await this.refreshTask; }
-    catch (error) {
-      if (this.mounted) {
-        this.message = `刷新失败：${error}`;
-        this.failStartup(this.message);
-        this.peersStale = true;
-      }
-    } finally {
-      this.refreshTask = undefined;
-      if (!silent) { this.busy = false; }
-      this.scheduleLoginRefresh();
-      this.scheduleVpnRefresh(); this.notify();
+    if (!this.mounted || this.corePaused) { return; }
+    if (this.refreshTask) { return; }
+    const epoch=this.dataEpoch;
+    this.peersUpdating=true;this.peersError='';this.notify();
+    this.refreshTask=this.loadData(silent);
+    try{await this.refreshTask;}
+    catch(e){
+      if(this.mounted&&epoch===this.dataEpoch){this.peersError=`设备更新暂未完成：${e}`;this.peersStale=true;}
+    }finally{
+      this.refreshTask=undefined;this.peersUpdating=false;
+      if(this.mounted){this.scheduleLoginRefresh();this.scheduleVpnRefresh();this.notify();}
     }
   }
 
@@ -451,20 +443,19 @@ export class ClientController {
 
   async login(): Promise<void> {
     if (this.busy) { return; }
-    this.busy = true; this.notify();
+    this.busy = true;this.dataEpoch++; this.notify();
     this.message = '';
     this.progress = '正在获取安全登录链接…';
     try {
-      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
       if (!this.mounted) { return; }
-      await this.ensureService();
+      await this.ensureAccount();
       if (!this.mounted) { return; }
       const raw: string = await tailscale.login();
       if (!this.mounted) { return; }
       this.output = safeOutput(raw);
       const result: ControlResult = readControl(raw);
       this.applyStatus(result);
-      if (isAuthenticated(result)) { await this.loadData(); }
+      if (isAuthenticated(result)) { this.refreshData(true); }
       else if (result.authUrl) {
         this.progress = '正在打开系统浏览器…';
         await this.openSystemBrowser(result.authUrl);
@@ -480,21 +471,31 @@ export class ClientController {
 
 
 
+  cancelLogin(): void {
+    this.awaitingLogin=false;this.loginDeadline=0;this.stopPolling();
+    this.message='已停止等待登录结果，可重新发起登录。';this.notify();
+  }
+  vpnCanRetry(): boolean {
+    return !this.vpnChanging && !this.vpnNeedsCleanup && this.hasAccount() &&
+      (this.recovery.phase==='failed' || this.recovery.phase==='blocked');
+  }
+
   async logout(): Promise<void> {
     if (this.busy) { return; }
     this.busy = true;
-    this.progress = '正在退出登录…';
+    this.dataEpoch++;this.vpnSequence++;this.progress = '正在退出登录…';
     try {
       if (this.vpnRunning() || this.vpnWanted()) { await this.disconnectVpn(); }
-      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
+      this.vpnChanging=false;this.vpnStopping=false;
       if (!this.mounted) { return; }
+      await this.ensureAccount();
       const raw: string = await tailscale.logout();
       if (!this.mounted) { return; }
       this.output = safeOutput(raw);
       const result: ControlResult = readControl(raw);
       if (isAuthenticated(result)) { throw new Error('控制面仍报告已登录，请刷新后重试'); }
       this.applyStatus(result);
-      this.clearAccountPreview();
+      this.dataEpoch++;this.clearAccountPreview();
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
       this.stopPolling();
@@ -505,11 +506,10 @@ export class ClientController {
   }
 
   async diagnostic(operation: string): Promise<void> {
-    if (this.busy) { return; }
-    this.busy = true;
+    if (this.diagnosticBusy) { return; }
+    this.diagnosticBusy = true;
     this.progress = '正在执行诊断…';
     try {
-      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
       if (!this.mounted) { return; }
       if (this.vpnRunning() && (operation === 'close' || operation === 'start')) {
         throw new Error('VPN 运行期间请使用主界面开关管理核心');
@@ -521,7 +521,8 @@ export class ClientController {
         this.output = '系统浏览器已成功唤起。';
       } else if (operation === 'close') {
         if (this.vpnWanted()) { await this.disconnectVpn(); }
-        await this.networkClient().shutdown(); this.networkStarted = false;
+        if(this.networkStarted){await this.networkClient().shutdown();}else{readControl(await tailscale.close());await getAccountSession().stopMonitor();}
+        this.dataEpoch++;this.networkStarted = false;
         this.output = '网络服务已停止；账号凭据未注销。';
         // Closing a runtime is not revoking credentials. Keep the saved view.
         if (isAuthenticated(this.status)) {
@@ -534,9 +535,9 @@ export class ClientController {
         this.stopPolling();
         if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
       } else if (operation === 'start') {
-        await this.ensureService(); this.output = '网络服务已就绪。';
+        await this.ensureAccount(); this.output = '账号网络服务已就绪（VPN 未自动开启）。';
         this.corePaused = false;
-        await this.loadData(true);
+        this.refreshData(true);
       } else if (operation === 'status') {
         const raw: string = await tailscale.getStatus();
         const snapshot = this.networkPort?.read();
@@ -544,7 +545,7 @@ export class ClientController {
         this.applyStatus(readControl(raw));
       } else { this.output = safeOutput(await tailscale.diagnostics(this.dataDir)); }
     } catch (error) { this.output = `诊断失败：${error}`; }
-    finally { this.busy = false; this.notify(); }
+    finally { this.diagnosticBusy = false; this.notify(); }
   }
 
   canProbe(): boolean {
@@ -568,7 +569,6 @@ export class ClientController {
     };
     const port = new PlatformVpnProbeRequest(want, this.appContext.filesDir);
     try {
-      if (this.refreshTask) { await this.refreshTask.catch((_error: Error) => {}); }
       if (!this.mounted) { return; }
       const report = await requestVpnProbe(port, requestId, () => !this.mounted,
         (stage: string, raw: string) => {
@@ -608,7 +608,7 @@ export class ClientController {
   private async recoverForeground(): Promise<void> {
     const previousCore = this.vpn.coreId;
     try {
-      await this.ensureService();
+      await this.ensureAccount();
       if (!this.mounted) { return; }
       if (previousCore && this.vpn.coreId!==previousCore && !this.vpn.connected) {
         this.message=this.vpnWanted() ? '网络服务已恢复，正在自动恢复 VPN。' : '网络服务已恢复，VPN 未开启。';
@@ -643,10 +643,9 @@ export class ClientController {
           if (report.phase === 'retry_wait' || report.phase === 'blocked') {
             this.vpn.connected = false;
           }
-          if (changed && report.phase !== 'off') {
-            if (report.phase === 'connected') { this.message = 'VPN 已恢复。'; }
-            else if (report.phase === 'blocked') { this.message = report.error; }
-            else { this.message = `VPN 正在自动恢复：${report.error}`; }
+          if(changed && report.phase !== 'off') {
+            this.vpnMessage = report.phase === 'connected' ? 'VPN 已开启。' :
+              report.phase === 'blocked' || report.phase === 'failed' ? report.error : this.vpnChanging ? '' : `连接恢复中：${report.error}`;
           }
           this.notify();
         }));
@@ -654,12 +653,19 @@ export class ClientController {
     }
     return this.network;
   }
-  private async ensureService(): Promise<void> {
-    const snapshot = await this.networkClient().ensure((message: string) => {
-      if (this.mounted) { this.progress = message; this.notify(); }
-    });
-    this.networkStarted = snapshot.serviceReady;
-    if (this.mounted) { this.vpn = snapshot; this.corePaused = false; }
+  private async ensureAccount(): Promise<void> {
+    if(!this.appContext){throw new Error('UI context unavailable');}
+    await getAccountSession().ensure(this.dataDir,this.hostname);
+    const live=readVpnState(await tailscale.getVpnStatus());
+    this.networkClient();
+    if(live.coreHost==='vpn'){
+      const snapshot=await this.network?.observe();
+      if(!snapshot){throw new Error('VPN 服务状态待确认');}
+      this.networkStarted=snapshot.serviceReady;if(this.mounted){this.vpn=snapshot;}
+    }else{
+      this.networkStarted=false;if(this.mounted){this.vpn=live;}
+    }
+    if(this.mounted){this.corePaused=false;this.completeStartup();}
   }
   notify(): void {
     if (!this.mounted || !this.observer) { return; }
@@ -669,6 +675,11 @@ export class ClientController {
     view.peers = this.peers;
     view.selectedPeer = this.selectedPeer;
     view.output = this.output;
+    view.peersUpdating = this.peersUpdating;
+    view.peersError = this.peersError;
+    view.vpnProgress = this.vpnProgress;
+    view.vpnMessage = this.vpnMessage;
+    view.diagnosticBusy = this.diagnosticBusy;
     view.busy = this.busy;
     view.progress = this.progress;
     view.message = this.message;
@@ -695,6 +706,11 @@ export class ClientController {
       previous.peers === view.peers &&
       previous.selectedPeer === view.selectedPeer &&
       previous.output === view.output &&
+      previous.peersUpdating === view.peersUpdating &&
+      previous.peersError === view.peersError &&
+      previous.vpnProgress === view.vpnProgress &&
+      previous.vpnMessage === view.vpnMessage &&
+      previous.diagnosticBusy === view.diagnosticBusy &&
       previous.busy === view.busy &&
       previous.progress === view.progress &&
       previous.message === view.message &&

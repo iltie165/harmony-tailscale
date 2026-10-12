@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -90,6 +93,46 @@ func TestMissingServiceNeverCreatesDiscoveryOwner(t *testing.T) {
 	}
 	if _, _, err := currentServer(); err == nil {
 		t.Fatal("failed proxy retained after disconnect")
+	}
+}
+
+func TestRefusedServiceProxyRetriesWhenOwnerBeginsListening(t *testing.T) {
+	fake := &fakeBackend{}
+	setupBackend(t, fake)
+	dir := t.TempDir()
+	// Leave the same stale Unix socket a terminated extension leaves behind.
+	old, err := net.Listen("unix", serviceSocket(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.(*net.UnixListener).SetUnlinkOnClose(false)
+	old.Close()
+	for i := 0; i < 2; i++ {
+		if r := connectServiceCore(dir, "test-service"); r.OK || r.Error == "" {
+			t.Fatal("missing listener reported ready", r)
+		}
+	}
+	if err := os.Remove(serviceSocket(dir)); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", serviceSocket(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ipnstate.Status{BackendState: "Starting"})
+	})}
+	go server.Serve(listener)
+	defer server.Close()
+	// No explicit disconnect, logout, service replacement or remote login.
+	if r := connectServiceCore(dir, "test-service"); !r.OK {
+		t.Fatal("failed proxy poisoned subsequent startup", r)
+	}
+	if fake.starts != 0 {
+		t.Fatal("UI started a second owner")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tailscaled.state")); !os.IsNotExist(err) {
+		t.Fatal("proxy opened login state", err)
 	}
 }
 

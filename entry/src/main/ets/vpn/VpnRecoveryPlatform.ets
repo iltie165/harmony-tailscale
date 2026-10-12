@@ -1,8 +1,9 @@
 import tailscale from 'libtailscale_napi.so';
 import { readControl, isAuthenticated } from '../pages/ClientModel';
-import { NetworkServiceClient, serviceDeadline } from './NetworkServiceClient';
+import { NetworkServiceClient, VpnAuthorizationRequired, serviceDeadline } from './NetworkServiceClient';
 import { PlatformNetworkClient } from './NetworkClientPlatform';
 import { NetworkServiceStore } from './NetworkServiceStore';
+import { readVpnState } from './VpnSessionModel';
 import { ServiceSnapshot } from './NetworkServiceModel';
 import { inspectNetworks } from './NetworkEnvironment';
 import { VpnIntent, VpnRecoveryPort, RecoveryReport, RecoveryBlocked } from './VpnRecoveryModel';
@@ -21,16 +22,29 @@ export class PlatformVpnRecovery implements VpnRecoveryPort {
   readIntent(): VpnIntent | undefined { return this.store.intent(); }
   writeIntent(value: VpnIntent): void { this.store.saveIntent(value); }
   cancel(): void { this.client.cancelEnable(); }
-  async disconnect(): Promise<void> { this.onState(await this.client.setEnabled(false, (_message: string): void => {})); }
+  async disconnect(): Promise<void> {
+    const cached = this.platform.read();
+    if (!cached || !cached.serviceReady) {
+      const live = readVpnState(await tailscale.getVpnStatus());
+      if (!live.attached && (live.coreHost === 'account' || !live.coreAlive)) { return; }
+      if (cached?.phase === 'stopped' && cached.detached && cached.destroyed && cached.descriptorClosed) { return; }
+    }
+    this.onState(await this.client.setEnabled(false, (_message: string): void => {}));
+  }
   publish(report: RecoveryReport): void { this.onReport(report); }
-  async recover(intent: VpnIntent, current: () => boolean, progress: (message: string) => void): Promise<void> {
+  async recover(intent: VpnIntent, current: () => boolean, progress: (message: string) => void, manual: boolean = false): Promise<void> {
     if (!current() || this.client.pending()) { throw new Error('等待当前网络操作完成'); }
     const cached = this.platform.read();
     const environment = await inspectNetworks(cached?.ipv4 || '');
     if (!current()) { return; }
     if (environment.otherVpn) { throw new RecoveryBlocked('检测到其他 VPN，自动恢复已暂停；请确认后重新开启'); }
     if (!environment.online) { throw new Error('等待物理网络恢复'); }
-    const owner = await this.client.ensure(progress);
+    let owner: ServiceSnapshot;
+    try { owner = await this.client.ensure(progress,manual,current,intent.revision); }
+    catch (e) {
+      if (e instanceof VpnAuthorizationRequired) { throw new RecoveryBlocked('VPN 服务已停止，请点击开启 VPN 重新连接'); }
+      throw e as Error;
+    }
     if (!current()) { return; }
     if (!environment.ownVpn) { owner.connected = false; }
     this.onState(owner);

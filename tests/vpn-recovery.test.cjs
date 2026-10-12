@@ -29,9 +29,10 @@ test('intent is persisted before networking and a new runtime resumes only expli
   const off=harness(t);off.supervisor.start();await off.supervisor.check();assert.deepEqual(off.calls,[]);
 });
 test('transient failures back off to 30 seconds, recover without resetting user intent and measure interruption',async t=>{
-  t.mock.timers.enable({apis:['Date'],now:1000});let broken=true;
+  t.mock.timers.enable({apis:['Date'],now:1000});let broken=false;
   const h=harness(t,{recover:async()=>{h.calls.push('recover');if(broken)throw new Error('offline');}});
-  await assert.rejects(h.supervisor.setWanted(true,()=>{}),/offline/);
+  await h.supervisor.setWanted(true,()=>{});broken=true;
+  await assert.rejects(h.supervisor.check(),/offline/);
   for(const wait of [1000,2000,4000,8000,16000,30000]) {
     assert.equal(h.supervisor.diagnostics().nextRetryAt-Date.now(),wait);
     const count=h.calls.length;await h.supervisor.check();assert.equal(h.calls.length,count);
@@ -42,8 +43,9 @@ test('transient failures back off to 30 seconds, recover without resetting user 
   assert.equal(h.supervisor.diagnostics().attempts,0);assert.ok(h.supervisor.diagnostics().lastRecoveryMs>0);
 });
 test('authentication/authorization/other-VPN blockers stop retries until an explicit new ON',async t=>{
-  let blocked=true;const h=harness(t,{recover:async()=>{h.calls.push('recover');if(blocked)throw new model.RecoveryBlocked('authorization revoked');}});
-  await assert.rejects(h.supervisor.setWanted(true,()=>{}),/revoked/);assert.equal(h.supervisor.diagnostics().phase,'blocked');
+  let blocked=false;const h=harness(t,{recover:async()=>{h.calls.push('recover');if(blocked)throw new model.RecoveryBlocked('authorization revoked');}});
+  await h.supervisor.setWanted(true,()=>{});blocked=true;
+  await assert.rejects(h.supervisor.check(),/revoked/);assert.equal(h.supervisor.diagnostics().phase,'blocked');
   const count=h.calls.length;await h.supervisor.check();assert.equal(h.calls.length,count);
   blocked=false;await h.supervisor.setWanted(true,()=>{});assert.equal(h.supervisor.diagnostics().phase,'connected');
 });
@@ -92,7 +94,7 @@ function platformHarness(overrides={}) {
   Object.assign(client,overrides.client);Object.assign(native,overrides.native);
   const mod=compile('vpn/VpnRecoveryPlatform',{'libtailscale_napi.so':{default:native},'../pages/ClientModel':controls,
     './NetworkServiceClient':clientModule,'./NetworkClientPlatform':{},'./NetworkServiceStore':{NetworkServiceStore:class{}},
-    './NetworkServiceModel':service,'./VpnRecoveryModel':model,'./NetworkEnvironment':{inspectNetworks:async()=>environment}});
+    './NetworkServiceModel':service,'./VpnSessionModel':vpn,'./VpnRecoveryModel':model,'./NetworkEnvironment':{inspectNetworks:async()=>environment}});
   const port=new mod.PlatformVpnRecovery(client,{read:()=>owner},'/private',s=>reports.push({...s}),()=>{});
   return {port,calls,owner,reports,environment:value=>{environment=value;}};
 }
@@ -149,10 +151,28 @@ test('atomic intent storage roundtrips without credentials; malformed/missing re
   const files=new Map(),writes=[];
   const fileIo={OpenMode:{CREATE:1,WRITE_ONLY:2,TRUNC:4},accessSync:p=>files.has(p),readTextSync:p=>files.get(p),
     openSync:p=>({fd:p}),writeSync:(p,value)=>files.set(p,value),closeSync:()=>{},renameSync:(a,b)=>{writes.push([a,b]);files.set(b,files.get(a));files.delete(a);}};
-  const storeModule=compile('vpn/NetworkServiceStore',{'@kit.CoreFileKit':{fileIo},'./NetworkServiceModel':service,'./VpnRecoveryModel':model});
+  const storeModule=compile('vpn/NetworkServiceStore',{'@kit.CoreFileKit':{fileIo},'./NetworkServiceModel':service,'./VpnSessionModel':vpn,'./VpnRecoveryModel':model});
   const store=new storeModule.NetworkServiceStore('/private');assert.equal(store.intent(),undefined);
   const intent=Object.assign(new model.VpnIntent(),{enabled:true,revision:'1-2'});store.saveIntent(intent);
   assert.deepEqual(store.intent(),{...intent});assert.deepEqual(writes,[['/private/vpn-intent.json.tmp','/private/vpn-intent.json']]);
   assert.deepEqual(Object.keys(JSON.parse(files.get('/private/vpn-intent.json'))).sort(),['enabled','revision','version']);
   files.set('/private/vpn-intent.json','null');assert.throws(()=>store.intent());
+});
+
+test('failed manual connection ends its intent; only established connections authorize automatic retries',async t=>{
+  const h=harness(t,{recover:async()=>{throw new Error('first connection timed out');}});
+  await assert.rejects(h.supervisor.setWanted(true,()=>{}),/timed out/);
+  assert.equal(h.supervisor.wanted(),false);assert.equal(h.saved().enabled,false);
+  assert.equal(h.supervisor.diagnostics().phase,'failed');assert.equal(h.supervisor.diagnostics().nextRetryAt,0);
+  assert.ok(h.calls.includes('cancel'));assert.ok(h.calls.includes('disconnect'));
+  await h.supervisor.check();assert.equal(h.supervisor.wanted(),false);
+});
+
+test('automatic recovery requiring new authorization pauses without requesting the SDK',async()=>{
+  let requested=false;
+  const h=platformHarness({client:{ensure:async(_progress,authorize)=>{
+    requested=authorize;throw new clientModule.VpnAuthorizationRequired('user action required');
+  }}});
+  await assert.rejects(h.port.recover({revision:'7-8'},()=>true,()=>{}),model.RecoveryBlocked);
+  assert.equal(requested,false);
 });

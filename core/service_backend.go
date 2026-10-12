@@ -107,6 +107,7 @@ type vpnState struct {
 	CoreOwner       bool     `json:"coreOwner"`
 	Attached        bool     `json:"attached"`
 	StartedAt       int64    `json:"startedAt,omitempty"`
+	CoreHost        string   `json:"coreHost,omitempty"`
 	NetworkMapReady bool     `json:"networkMapReady"`
 	AssignedIPv4    string   `json:"assignedIPv4,omitempty"`
 }
@@ -186,6 +187,7 @@ func (r *platformRouter) Set(c *router.Config) error {
 
 type serviceBackend struct {
 	dir, hostname, address string
+	foreground             bool
 	tun                    *packetTun
 	lease                  *stateLease
 	sys                    *tsd.System
@@ -302,7 +304,10 @@ func (b *serviceBackend) LocalClient() (controlClient, error) {
 	return localAdapter{b.client}, nil
 }
 func (b *serviceBackend) VPNState(context.Context) vpnState {
-	s := vpnState{OK: true, State: "disconnected", CoreID: b.coreID, StartedAt: b.startedAt, CoreOwner: true}
+	s := vpnState{OK: true, State: "disconnected", CoreID: b.coreID, StartedAt: b.startedAt, CoreOwner: true, CoreHost: "vpn"}
+	if b.foreground {
+		s.CoreHost = "account"
+	}
 	s.DebugLogs = recentLogLines(24)
 	if b.device == nil {
 		return s

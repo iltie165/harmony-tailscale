@@ -15,9 +15,13 @@ func startCore(dataDir, hostname string) operationResult {
 }
 
 func startWithBackend(dataDir, hostname string, factory func(string, string) backend) operationResult {
-	operationMu.Lock()
+	lockMutation()
 	defer operationMu.Unlock()
+	return startWithBackendLocked(dataDir, hostname, factory)
+}
 
+// Caller holds operationMu, including any failed-proxy disposal before retry.
+func startWithBackendLocked(dataDir, hostname string, factory func(string, string) backend) operationResult {
 	if dataDir != "" {
 		dataDir = filepath.Clean(dataDir)
 	}
@@ -61,7 +65,7 @@ func startWithBackend(dataDir, hostname string, factory func(string, string) bac
 }
 
 func logoutCore() controlStatusResult {
-	operationMu.Lock()
+	lockMutation()
 	defer operationMu.Unlock()
 
 	server, state, err := currentServer()
@@ -84,8 +88,8 @@ func logoutCore() controlStatusResult {
 }
 
 func onlinePeersCore(filter string) onlinePeersResult {
-	operationMu.Lock()
-	defer operationMu.Unlock()
+	operationMu.RLock()
+	defer operationMu.RUnlock()
 
 	filter = strings.TrimSpace(filter)
 	result := onlinePeersResult{
@@ -108,7 +112,7 @@ func onlinePeersCore(filter string) onlinePeersResult {
 		result.Error = err.Error()
 		return result
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := readContext(3 * time.Second)
 	defer cancel()
 	status, err := client.Status(ctx)
 	if err != nil {
@@ -156,7 +160,7 @@ func onlinePeersCore(filter string) onlinePeersResult {
 }
 
 func closeCore() operationResult {
-	operationMu.Lock()
+	lockMutation()
 	defer operationMu.Unlock()
 
 	lifecycle.RLock()
@@ -192,7 +196,7 @@ func fetchControlStatus(operation string) controlStatusResult {
 	if err != nil {
 		return controlStatus(operation, state, nil, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := readContext(3 * time.Second)
 	defer cancel()
 	status, err := client.Status(ctx)
 	result := controlStatus(operation, state, status, err)
