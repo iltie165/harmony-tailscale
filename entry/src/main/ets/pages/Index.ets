@@ -1,4 +1,4 @@
-import { common, Want } from '@kit.AbilityKit';
+import { common, Want, bundleManager } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
@@ -9,6 +9,7 @@ import { startVpnSession, stopVpnSession, vpnSdkPending, boundedVpn, VpnSessionE
 import { PlatformSessionRequest } from '../vpn/VpnSessionRequest';
 import { ControlResult, PeerInfo, readControl, readPeers, isAuthenticated,
   accountName, tailnetName, peerName, peerAddress, osLabel, safeOutput } from './ClientModel';
+import { SessionPreview, SessionPreviewStore, previewOf } from './SessionPreview';
 
 const BLUE: string = '#086CFA';
 const INK: string = '#142337';
@@ -35,6 +36,10 @@ struct Index {
   @State private lastUpdated: string = '';
   @State private awaitingLogin: boolean = false;
   @State private restoringSession: boolean = true;
+  @State private previewAccount: ControlResult = {};
+  @State private peersStale: boolean = true;
+  @State private corePaused: boolean = false;
+  @State private appVersion: string = 'Alpha';
   @State private vpn: VpnState = new VpnState();
   @State private vpnChanging: boolean = false;
   @State private vpnNeedsCleanup: boolean = false;
@@ -48,11 +53,16 @@ struct Index {
   private foreground: boolean = true;
   private mounted: boolean = false;
   private refreshTask: Promise<void> | undefined = undefined;
+  private previewStore: SessionPreviewStore | undefined = undefined;
+  private persistedPreview: string = '';
   private foregroundCallback = (_event: emitter.EventData): void => {
     this.foreground = true;
     if (!this.busy) { this.refreshData(true); }
   };
-  private backgroundCallback = (_event: emitter.EventData): void => { this.foreground = false; };
+  private backgroundCallback = (_event: emitter.EventData): void => {
+    this.foreground = false; this.stopPolling();
+    if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
+  };
 
   aboutToAppear(): void {
     this.mounted = true;
@@ -60,7 +70,15 @@ struct Index {
     this.dataDir = `${this.appContext.filesDir}/tailscale`;
     emitter.on('tailscale.foreground', this.foregroundCallback);
     emitter.on('tailscale.background', this.backgroundCallback);
+    this.readAppVersion();
     this.restoreSession();
+  }
+
+  private async readAppVersion(): Promise<void> {
+    try {
+      const info = await bundleManager.getBundleInfoForSelf(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      if (this.mounted) { this.appVersion = info.versionName; }
+    } catch (_error) { /* Version lookup does not block account restoration. */ }
   }
 
   aboutToDisappear(): void {
@@ -83,6 +101,28 @@ struct Index {
     if (this.pollTimer !== -1) { clearTimeout(this.pollTimer); this.pollTimer = -1; }
   }
 
+  private hasAccount(): boolean { return isAuthenticated(this.status) || this.previewAccount.self !== undefined; }
+  private displayAccount(): ControlResult { return this.previewAccount.self ? this.previewAccount : this.status; }
+  private savePreview(): void {
+    const snapshot = this.hasAccount() ? previewOf(this.displayAccount(),
+      this.peerFilter.trim() ? [] : this.peers, this.peerFilter.trim() ? '' : this.lastUpdated) : new SessionPreview();
+    const text = JSON.stringify(snapshot);
+    if (text === this.persistedPreview || !this.previewStore) { return; }
+    try { this.previewStore.write(snapshot); this.persistedPreview = text; }
+    catch (_error) { hilog.warn(0x5453, 'TailscaleProbe', 'Display cache write failed; live state is unchanged'); }
+  }
+  private clearAccountPreview(): void {
+    this.previewAccount = {}; this.peers = []; this.selectedPeer = undefined;
+    this.lastUpdated = ''; this.peersStale = true;
+    this.savePreview();
+  }
+  private connectionLabel(): string {
+    if (this.corePaused) { return '账号已保留 · 网络连接已暂停'; }
+    if (!isAuthenticated(this.status)) { return '已保存账号 · 正在核对连接状态'; }
+    if (this.status.backendState !== 'Running') { return '账号已保留 · 正在连接'; }
+    return this.vpnRunning() ? (this.vpn.connected ? '已登录 · VPN 已开启' : '已登录 · VPN 正在重连') : '已登录 · VPN 未开启';
+  }
+
   private scheduleLoginRefresh(): void {
     this.stopPolling();
     if (!this.mounted) { return; }
@@ -102,12 +142,27 @@ struct Index {
   private applyStatus(result: ControlResult): void {
     if (!this.mounted) { return; }
     if (JSON.stringify(this.status) !== JSON.stringify(result)) { this.status = result; }
-    if (!isAuthenticated(result)) {
-      this.peers = [];
-      this.selectedPeer = undefined;
-      this.lastUpdated = '';
+    if (result.backendState === 'NeedsLogin' || result.backendState === 'NeedsMachineAuth') {
+      this.clearAccountPreview();
       if (this.page === 'detail') { this.page = 'main'; }
-    } else if (result.backendState === 'Running') {
+    } else if (isAuthenticated(result)) {
+      const previous = this.previewAccount.self;
+      const current = result.self;
+      const previousTailnet = this.previewAccount.tailnet?.magicDNSSuffix;
+      const currentTailnet = result.tailnet?.magicDNSSuffix;
+      if ((previous?.userLogin && current?.userLogin && previous.userLogin !== current.userLogin) ||
+        (previous?.id && current?.id && previous.id !== current.id) ||
+        (previousTailnet && currentTailnet && previousTailnet !== currentTailnet)) {
+        this.previewAccount = {};
+        this.peers = []; this.selectedPeer = undefined; this.lastUpdated = ''; this.peersStale = true;
+      }
+      const nextAccount: ControlResult = { self: result.self || this.previewAccount.self,
+        tailnet: result.tailnet || this.previewAccount.tailnet,
+        tailscaleIPs: result.tailscaleIPs?.length ? result.tailscaleIPs : this.previewAccount.tailscaleIPs };
+      if (JSON.stringify(nextAccount) !== JSON.stringify(this.previewAccount)) { this.previewAccount = nextAccount; }
+      this.savePreview();
+    }
+    if (isAuthenticated(result) && result.backendState === 'Running') {
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
       this.stopPolling();
@@ -138,20 +193,21 @@ struct Index {
       const changed = JSON.stringify(this.peers) !== JSON.stringify(nextPeers);
       if (changed) {
         this.peers = nextPeers;
-        if (this.selectedPeer) { this.selectedPeer = nextPeers.find((peer: PeerInfo) => peer.id === this.selectedPeer?.id); }
+        if (this.selectedPeer) { this.selectedPeer = nextPeers.find((peer: PeerInfo) => peer.id === this.selectedPeer?.id) || this.selectedPeer; }
       }
-      if (changed || !silent) { this.lastUpdated = new Date().toLocaleTimeString(); }
-    } else if (isAuthenticated(this.status)) {
-      // An authenticated account can be reconnecting; no stale online claims.
-      this.peers = []; this.selectedPeer = undefined; this.lastUpdated = '';
+      if (changed || !silent || this.peersStale) { this.lastUpdated = new Date().toLocaleString(); }
+      this.peersStale = false;
+      this.savePreview();
+    } else if (this.hasAccount()) {
+      // Retain explicitly labelled historical data, not a live online claim.
+      this.peersStale = true;
     }
     this.scheduleVpnRefresh();
   }
 
   private scheduleVpnRefresh(): void {
     if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
-    if (!this.mounted || (!this.vpnRunning() &&
-      !(isAuthenticated(this.status) && this.status.backendState !== 'Running'))) { return; }
+    if (!this.mounted || !this.foreground || this.corePaused || (!this.vpnRunning() && !this.hasAccount())) { return; }
     this.vpnTimer = setTimeout(() => {
       this.vpnTimer = -1;
       if (this.foreground && !this.busy) { this.refreshData(true); }
@@ -220,7 +276,10 @@ struct Index {
       if (vpnSdkPending()) { throw new Error('Previous VPN SDK operation is still pending'); }
       if (enabled) {
         if (this.vpnNeedsCleanup) { throw new Error('请先关闭 VPN，完成上一次清理'); }
-        if (!isAuthenticated(this.status) || !this.appContext) { throw new Error('请先完成登录'); }
+        if (!this.hasAccount() || !this.appContext) { throw new Error('请先完成登录'); }
+        if (this.corePaused) {
+          readControl(await tailscale.start(this.dataDir, this.hostname)); this.corePaused = false;
+        }
         const ipv4 = await this.waitForVpnReady();
         if (!this.mounted) { return; }
         this.progress = '正在将核心交给 VPN 服务…';
@@ -235,15 +294,23 @@ struct Index {
         });
         readControl(await boundedVpn(tailscale.start(this.dataDir, this.hostname), 10000, 'Connect VPN LocalAPI'));
         if (!this.mounted) { return; }
-        await this.loadData();
-        if (!this.vpn.connected) { throw new Error('VPN 服务尚未确认数据通路已启动'); }
+        const confirmed = readVpnState(await tailscale.getVpnStatus());
+        if (!this.mounted) { return; }
+        if (!confirmed.connected) { throw new Error('VPN 服务尚未确认数据通路已启动'); }
+        this.vpn = confirmed;
         this.vpnNeedsCleanup = false;
         this.message = 'VPN 已开启。请通过 100.x 地址测试其他设备的服务。';
+        try { await this.loadData(true); }
+        catch (syncError) { if (this.mounted) { this.peersStale = true; this.message = `VPN 已开启，设备同步暂未完成：${syncError}`; } }
       } else {
         this.vpnNeedsCleanup = true;
         this.progress = '正在断开 VPN 并恢复普通网络…';
         await this.disconnectVpn();
-        if (this.mounted) { await this.loadData(); this.message = 'VPN 已关闭，登录已保留。'; }
+        if (this.mounted) {
+          this.message = 'VPN 已关闭，登录已保留。';
+          try { await this.loadData(true); }
+          catch (syncError) { if (this.mounted) { this.peersStale = true; this.message += `设备同步暂未完成：${syncError}`; } }
+        }
       }
     } catch (error) {
       if (this.mounted) {
@@ -264,6 +331,17 @@ struct Index {
 
   private async restoreSession(): Promise<void> {
     this.restoringSession = true;
+    if (this.appContext) {
+      this.previewStore = new SessionPreviewStore(this.appContext.filesDir);
+      const saved = this.previewStore.read();
+      if (saved) {
+        this.previewAccount = saved.account; this.peers = saved.peers;
+        this.lastUpdated = saved.updatedAt; this.peersStale = true;
+        this.persistedPreview = JSON.stringify(saved);
+        // The first frame can display saved metadata while native startup runs.
+        this.restoringSession = false;
+      }
+    }
     this.busy = true;
     this.restoreDeadline = Date.now() + 15000;
     this.progress = '正在恢复登录状态…';
@@ -272,9 +350,14 @@ struct Index {
       if (!this.mounted) { return; }
       await this.loadData();
     } catch (error) {
-      this.restoreDeadline = 0;
-      this.message = `恢复状态失败：${error}`;
-    } finally { this.restoringSession = false; this.busy = false; this.scheduleLoginRefresh(); }
+      if (this.mounted) {
+        this.restoreDeadline = 0;
+        this.peersStale = true;
+        this.message = `恢复状态失败：${error}`;
+      }
+    } finally {
+      if (this.mounted) { this.restoringSession = false; this.busy = false; this.scheduleLoginRefresh(); }
+    }
   }
 
   private async refreshData(silent: boolean = false): Promise<void> {
@@ -290,9 +373,7 @@ struct Index {
     catch (error) {
       if (this.mounted) {
         this.message = `刷新失败：${error}`;
-        this.peers = [];
-        this.selectedPeer = undefined;
-        this.lastUpdated = '';
+        this.peersStale = true;
       }
     } finally {
       this.refreshTask = undefined;
@@ -367,6 +448,7 @@ struct Index {
       const result: ControlResult = readControl(raw);
       if (isAuthenticated(result)) { throw new Error('控制面仍报告已登录，请刷新后重试'); }
       this.applyStatus(result);
+      this.clearAccountPreview();
       this.awaitingLogin = false;
       this.restoreDeadline = 0;
       this.stopPolling();
@@ -395,12 +477,20 @@ struct Index {
         const raw: string = await tailscale.close();
         readControl(raw);
         this.output = safeOutput(raw);
-        this.applyStatus({ ok: true, loggedIn: false, lifecycleState: 'closed' });
+        // Closing a runtime is not revoking credentials. Keep the saved view.
+        if (isAuthenticated(this.status)) {
+          this.previewAccount = previewOf(this.status, [], '').account; this.savePreview();
+        }
+        this.corePaused = true; this.peersStale = true;
+        this.status = { ok: true, lifecycleState: 'closed' };
         this.awaitingLogin = false;
         this.restoreDeadline = 0;
         this.stopPolling();
+        if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
       } else if (operation === 'start') {
         this.output = safeOutput(await tailscale.start(this.dataDir, this.hostname));
+        this.corePaused = false;
+        await this.loadData(true);
       } else if (operation === 'status') {
         const raw: string = await tailscale.getStatus();
         this.output = `${safeOutput(raw)}\nVPN：\n${safeOutput(await tailscale.getVpnStatus())}`;
@@ -572,8 +662,8 @@ struct Index {
         Text(osLabel(peer.os || '')).fontSize(11).fontColor(MUTED)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       Row({ space: 4 }) {
-        Text('').width(6).height(6).backgroundColor('#16CF74').borderRadius(3)
-        Text('在线').fontSize(11).fontColor('#089A52')
+        Text('').width(6).height(6).backgroundColor(this.peersStale ? MUTED : '#16CF74').borderRadius(3)
+        Text(this.peersStale ? '待更新' : '在线').fontSize(11).fontColor(this.peersStale ? MUTED : '#089A52')
       }
       this.icon($r('app.media.chevron_right'), 14)
     }.width('100%').padding(16).borderRadius(20).backgroundColor(Color.White)
@@ -584,13 +674,13 @@ struct Index {
   @Builder
   private dashboard() {
     Row({ space: 12 }) {
-      Text(accountName(this.status).slice(0, 1).toUpperCase()).fontSize(19).fontColor(BLUE)
+      Text(accountName(this.displayAccount()).slice(0, 1).toUpperCase()).fontSize(19).fontColor(BLUE)
         .fontWeight(FontWeight.Bold).width(44).height(44).textAlign(TextAlign.Center)
         .backgroundColor('#DAEAFF').borderRadius(22)
       Column({ space: 5 }) {
-        Text(accountName(this.status)).fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK)
+        Text(accountName(this.displayAccount())).fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(tailnetName(this.status)).fontSize(12).fontColor(MUTED)
+        Text(tailnetName(this.displayAccount())).fontSize(12).fontColor(MUTED)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       Button({ type: ButtonType.Normal }) { this.icon($r('app.media.settings')) }
@@ -599,7 +689,7 @@ struct Index {
     }.width('100%').margin({ bottom: 20 })
     Row({ space: 7 }) {
       Text('').width(7).height(7).backgroundColor(BLUE).borderRadius(4)
-      Text(this.vpnRunning() ? (this.vpn.connected ? '已登录 · VPN 已开启' : '已登录 · VPN 连接待确认') : '已登录 · VPN 未开启')
+      Text(this.connectionLabel())
         .fontSize(12).fontColor('#427297')
     }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor('#DEEEFB')
       .borderRadius(20).margin({ bottom: 18 }).alignSelf(ItemAlign.Start)
@@ -618,12 +708,12 @@ struct Index {
         .onChange((enabled: boolean) => { this.setVpn(enabled); })
         .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })
-    Text(`本机 IP：${this.status.tailscaleIPs?.join(' · ') || '暂无'}`)
+    Text(`${this.status.backendState === 'Running' && this.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.displayAccount().tailscaleIPs?.join(' · ') || '暂无'}`)
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
       .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
     this.notice()
     if (this.status.backendState !== 'Running') {
-      Text('账号已保留，正在重新连接并同步设备…').fontSize(13).fontColor(MUTED)
+      Text(this.corePaused ? '网络连接已暂停，账号记录已保留。' : '账号记录已保留，正在核对连接并同步设备…').fontSize(13).fontColor(MUTED)
         .width('100%').margin({ bottom: 16 })
     }
     if (this.status.health && this.status.health.length > 0) {
@@ -631,7 +721,7 @@ struct Index {
         .width('100%').padding(14).backgroundColor('#FFF4DE').borderRadius(16).margin({ bottom: 16 })
     }
     Row() {
-      Text(`在线设备 (${this.peers.length})`).fontSize(17).fontWeight(FontWeight.Bold)
+      Text(`${this.peersStale ? '最近设备' : '在线设备'} (${this.peers.length})`).fontSize(17).fontWeight(FontWeight.Bold)
         .fontColor(INK).layoutWeight(1)
       Button(this.showFilter ? '收起' : '筛选').fontSize(12).fontColor(MUTED)
         .backgroundColor(Color.Transparent).height(40).onClick(() => { this.showFilter = !this.showFilter; })
@@ -654,14 +744,14 @@ struct Index {
     if (this.peers.length === 0 && !this.busy) {
       Column({ space: 12 }) {
         this.icon($r('app.media.device_desktop'), 36)
-        Text(this.message ? '暂时无法获取设备' : (this.peerFilter ? '没有匹配的在线设备' : '暂无可见的在线设备'))
+        Text(this.peersStale ? '设备信息待更新' : (this.peerFilter ? '没有匹配的在线设备' : '暂无可见的在线设备'))
           .fontSize(15).fontColor(INK)
         Text('点击刷新重试，或检查设备是否在线及访问策略。')
           .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center)
       }.width('100%').padding(24).backgroundColor(Color.White).borderRadius(20)
     }
     if (this.lastUpdated) {
-      Text(`更新于 ${this.lastUpdated}`).fontSize(11).fontColor(MUTED).width('100%')
+      Text(`${this.peersStale ? '历史数据 · ' : ''}更新于 ${this.lastUpdated}`).fontSize(11).fontColor(MUTED).width('100%')
         .margin({ top: 8, bottom: 16 })
     }
     Row({ space: 12 }) {
@@ -682,10 +772,10 @@ struct Index {
     this.notice()
     Column({ space: 10 }) {
       Text('账号与网络').fontSize(12).fontColor(MUTED).width('100%')
-      Text(isAuthenticated(this.status) ? accountName(this.status) : '未登录')
+      Text(this.hasAccount() ? accountName(this.displayAccount()) : '未登录')
         .fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK).width('100%')
-      if (isAuthenticated(this.status)) {
-        Text(tailnetName(this.status)).fontSize(13).fontColor(MUTED).width('100%')
+      if (this.hasAccount()) {
+        Text(tailnetName(this.displayAccount())).fontSize(13).fontColor(MUTED).width('100%')
       }
       Text('官方 Tailscale 控制面').fontSize(13).fontColor(MUTED).width('100%')
     }.padding(20).width('100%').backgroundColor(Color.White).borderRadius(22).margin({ bottom: 16 })
@@ -707,7 +797,7 @@ struct Index {
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.page = 'diagnostics'; }).margin({ bottom: 24 })
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
-    Text('3.2.1 Alpha · Tailscale Core 1.86.2').fontSize(12).fontColor(MUTED).margin({ top: 6 })
+    Text(`${this.appVersion} · Tailscale Core 1.86.2`).fontSize(12).fontColor(MUTED).margin({ top: 6 })
     Text('VPN Alpha：支持登录、在线设备和 Tailnet IPv4 互通。暂不支持 MagicDNS、IPv6、出口节点和子网路由。')
       .fontSize(12).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 16 })
   }
@@ -754,7 +844,7 @@ struct Index {
         this.icon(this.peerIcon(this.selectedPeer.os || ''), 46)
         Text(peerName(this.selectedPeer)).fontSize(24).fontWeight(FontWeight.Bold)
           .fontColor(INK).margin({ top: 16, bottom: 8 })
-        Text('在线 · 最近一次查询结果').fontSize(12).fontColor('#089A52').margin({ bottom: 28 })
+        Text(this.peersStale || !this.peers.some((peer: PeerInfo) => peer.id === this.selectedPeer?.id) ? '最近记录 · 当前状态待确认' : '在线 · 最近一次查询结果').fontSize(12).fontColor(MUTED).margin({ bottom: 28 })
         this.detailRow('Tailscale IP', peerAddress(this.selectedPeer))
         this.detailRow('系统', osLabel(this.selectedPeer.os || ''))
         this.detailRow('DNS 名称', this.selectedPeer.dnsName || '未提供')
@@ -777,7 +867,7 @@ struct Index {
             Text('正在恢复账号…').fontSize(15).fontColor(MUTED)
           }.width('100%').padding({ top: 100, bottom: 100 })
         }
-        else if (isAuthenticated(this.status)) { this.dashboard() }
+        else if (this.hasAccount()) { this.dashboard() }
         else { this.welcome() }
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })
     }.width('100%').height('100%').scrollBar(BarState.Off)

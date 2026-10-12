@@ -1,11 +1,13 @@
 'use strict';
-const { test } = require('node:test');
+const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const Module = require('node:module');
 const path = require('node:path');
 const ts = require(process.env.TYPESCRIPT_MODULE);
 const root = path.resolve(__dirname, '..');
+const activeViews = new Set();
+afterEach(() => { for (const ui of activeViews) ui.aboutToDisappear(); activeViews.clear(); });
 function compile(source, name, dependencies = {}) {
   const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS }
@@ -32,7 +34,7 @@ const running = {
   tailnet: { name: 'test.net', magicDNSSuffix: 'test.ts.net' }
 };
 const onlinePeer = { id: 'one', online: true, hostName: 'test-host', os: 'linux', tailscaleIPs: ['100.64.1.2'] };
-function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, sessionOverrides = {}) {
+function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, sessionOverrides = {}, files = new Map()) {
   const calls = [];
   let sessionLive = false;
   let sessionReport;
@@ -88,6 +90,17 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     ...overrides
   };
   const emitter = { on() {}, off() {}, emit() {} };
+  const preview = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/SessionPreview.ets'), 'utf8'), 'preview.cjs', {
+    './ClientModel': model, '@kit.CoreFileKit': { fileIo: {
+      OpenMode: { CREATE: 1, WRITE_ONLY: 2, TRUNC: 4 },
+      accessSync: (p) => files.has(p),
+      readTextSync: (p) => files.get(p),
+      openSync: (p) => ({ fd: p }),
+      writeSync: (p, text) => files.set(p, text),
+      closeSync() {},
+      renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); }
+    } }
+  });
   const full = fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/Index.ets'), 'utf8');
   // Execute the actual production methods, not a duplicate controller. ArkUI
   // builders and decorators are compiler-only and remain verified by Hvigor.
@@ -99,14 +112,16 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     .replace(/@State /g, '') + '\n}\n';
   const { Index } = compile(source, 'index.cjs', {
     '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter },
-    '@kit.PerformanceAnalysisKit': { hilog: { info() {} } },
+    '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
     'libtailscale_napi.so': { default: native }, './ClientModel': model,
+    './SessionPreview': preview,
     '../vpn/VpnProbeClient': vpnClient,
     '../vpn/VpnProbePlatform': platform,
     '../vpn/VpnSessionModel': sessionModel, '../vpn/VpnSessionClient': sessionClient,
     '../vpn/VpnSessionRequest': { PlatformSessionRequest }
   });
   const ui = new Index();
+  activeViews.add(ui);
   ui.mounted = true;
   ui.dataDir = '/private/tailscale';
   ui.appContext = {
@@ -114,7 +129,7 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
     openLink: async (url) => { calls.push(['browser', url]); },
     startAbility: async () => { calls.push('fallback'); }
   };
-  return { ui, calls, probeCalls };
+  return { ui, calls, probeCalls, files, preview };
 }
 
 test('main VPN toggle hands off discovery, reads independent live state, and OFF retains login', async () => {
@@ -148,10 +163,11 @@ test('failed OFF leaves shutdown uncertain and retryable; it does not resume ano
   ui.aboutToDisappear();
 });
 
-test('failure to read peers after VPN startup never closes the owner or starts a competing discovery core', async () => {
+test('peer query failure after confirmed VPN startup does not mark VPN failed or require cleanup', async () => {
   const { ui, calls } = harness({ onlinePeers: async () => { throw new Error('peer query timed out'); } });
   ui.status = running; await ui.setVpn(true);
-  assert.equal(ui.vpnNeedsCleanup, true); assert.match(ui.message, /尚未确认关闭/);
+  assert.equal(ui.vpnNeedsCleanup, false); assert.equal(ui.vpn.connected, true);
+  assert.match(ui.message, /VPN 已开启，设备同步暂未完成/);
   assert.equal(calls.filter((c) => c === 'close').length, 1);
   assert.equal(calls.filter((c) => c === 'start').length, 1);
   assert.ok(!calls.includes('vpnStop')); ui.aboutToDisappear();
@@ -324,13 +340,14 @@ test('browser dispatch failure uses platform fallback and does not log URL', asy
   assert.ok(calls.includes('fallback'));
   assert.equal(ui.awaitingLogin, true);
 });
-test('peer refresh failure clears stale online devices, preserves backend error', async () => {
+test('peer refresh failure retains labelled historical devices and preserves backend error', async () => {
   const { ui } = harness({ onlinePeers: async () => JSON.stringify({ ok: false, error: 'group unsupported' }) });
   ui.peers = [onlinePeer];
   ui.lastUpdated = 'yesterday';
   await ui.refreshData();
-  assert.equal(ui.peers.length, 0);
-  assert.equal(ui.lastUpdated, '');
+  assert.equal(ui.peers.length, 1);
+  assert.equal(ui.peersStale, true);
+  assert.equal(ui.lastUpdated, 'yesterday');
   assert.match(ui.message, /group unsupported/);
   assert.equal(ui.busy, false);
 });
@@ -371,7 +388,8 @@ test('navigation back and close distinguish stopping core from deleting account 
   ui.peers = [onlinePeer];
   await ui.diagnostic('close');
   assert.equal(model.isAuthenticated(ui.status), false);
-  assert.equal(ui.peers.length, 0);
+  assert.equal(ui.hasAccount(), true); assert.equal(ui.corePaused, true);
+  assert.equal(ui.peers.length, 1); assert.equal(ui.peersStale, true);
 });
 test('persisted session can become Running after the first startup snapshot', async () => {
   let reads = 0;
@@ -437,7 +455,7 @@ test('cold launch restores saved account before Running and silently continues a
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(ui.peers.length, 1);
   assert.equal(ui.busy, false);
-  assert.equal(ui.vpnTimer, -1);
+  assert.notEqual(ui.vpnTimer, -1);
   ui.aboutToDisappear();
 });
 
@@ -453,7 +471,7 @@ test('VPN OFF preserves account through discovery restart, without login/logout/
   await ui.setVpn(false);
   assert.equal(ui.vpn.connected, false);
   assert.equal(model.isAuthenticated(ui.status), true);
-  assert.equal(ui.peers.length, 0);
+  assert.equal(ui.peers.length, 1); assert.equal(ui.peersStale, true);
   assert.notEqual(ui.pollTimer, -1);
   assert.match(ui.message, /登录已保留/);
   assert.ok(!calls.includes('login'));
@@ -715,7 +733,8 @@ test('silent polling reports real failures and does not rearm after unmount', as
   const { ui } = harness({ onlinePeers: async () => { throw new Error('peer API failed'); } });
   ui.peers = [onlinePeer];
   await ui.refreshData(true);
-  assert.match(ui.message, /peer API failed/); assert.deepEqual(ui.peers, []); assert.equal(ui.busy, false);
+  assert.match(ui.message, /peer API failed/); assert.deepEqual(ui.peers, [onlinePeer]);
+  assert.equal(ui.peersStale, true); assert.equal(ui.busy, false);
   const late = harness({ getStatus: async () => {
     await new Promise((resolve) => { release = resolve; }); throw new Error('late failure');
   } }).ui;
@@ -786,4 +805,127 @@ test('destroying the stage during pending window setup prevents a late subscript
   const pending = layout.start(); layout.stop(); release(); await pending;
   assert.ok(!calls.includes('subscribe'));
   assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === 'fullscreen'));
+});
+
+test('display cache renders an account before native startup without claiming authentication or VPN readiness', async () => {
+  let release;
+  const files = new Map();
+  const setup = harness({}, {}, {}, {}, files);
+  new setup.preview.SessionPreviewStore('/private').write(setup.preview.previewOf(running, [onlinePeer], 'last session'));
+  const { ui, calls } = harness({ start: () => new Promise((resolve) => { release = resolve; }) }, {}, {}, {}, files);
+  const opening = ui.restoreSession();
+  assert.equal(ui.restoringSession, false); assert.equal(ui.hasAccount(), true);
+  assert.equal(model.isAuthenticated(ui.status), false); assert.equal(ui.vpn.connected, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.peers)), [onlinePeer]); assert.equal(ui.peersStale, true);
+  assert.equal(ui.lastUpdated, 'last session'); assert.deepEqual(calls, []);
+  assert.match(ui.connectionLabel(), /已保存账号/);
+  release(JSON.stringify({ ok: true, state: 'started' })); await opening;
+  assert.equal(model.isAuthenticated(ui.status), true); assert.equal(ui.peersStale, false);
+});
+
+test('offline core queries preserve cached display; explicit NeedsLogin invalidates it on disk', async () => {
+  const files = new Map(); const setup = harness({}, {}, {}, {}, files);
+  new setup.preview.SessionPreviewStore('/private').write(setup.preview.previewOf(running, [onlinePeer], 'saved'));
+  let offline = true;
+  const { ui } = harness({ getStatus: async () => {
+    if (offline) throw new Error('network unavailable'); return JSON.stringify(loggedOut);
+  } }, {}, {}, {}, files);
+  await ui.restoreSession();
+  assert.equal(ui.hasAccount(), true); assert.equal(ui.peersStale, true); assert.equal(ui.peers.length, 1);
+  assert.match(ui.message, /network unavailable/); assert.equal(model.isAuthenticated(ui.status), false);
+  offline = false; await ui.refreshData(true);
+  assert.equal(ui.hasAccount(), false); assert.deepEqual(ui.peers, []);
+  assert.equal(new setup.preview.SessionPreviewStore('/private').read(), undefined);
+});
+
+test('display cache is whitelisted and ignores injected credentials, auth flags and VPN state', () => {
+  const { preview } = harness();
+  const dirty = { ...running, authUrl: 'https://login.tailscale.com/a/secret', privateKey: 'private-secret',
+    connected: true, debugLogs: ['secret-log'], self: { ...running.self, nodeKey: 'node-secret' } };
+  const raw = JSON.stringify({ version: 1, account: dirty, peers: [{ ...onlinePeer, secret: 'peer-secret' }], updatedAt: 'saved' });
+  const safe = preview.readPreview(raw);
+  assert.equal(model.isAuthenticated(safe.account), false);
+  const text = JSON.stringify(safe); assert.ok(!text.includes('secret'));
+  assert.ok(!text.includes('authUrl')); assert.ok(!text.includes('connected')); assert.ok(!text.includes('loggedIn'));
+  for (const bad of ['{}', 'not-json', JSON.stringify({ version: 1, account: running, peers: null, updatedAt: 'x' }),
+    JSON.stringify({ version: 1, account: running, peers: [{ id: 9, online: true }], updatedAt: 'x' })]) {
+    assert.throws(() => preview.readPreview(bad));
+  }
+});
+
+test('a corrupted cache does not prevent live restoration; a successful logout leaves no saved account', async () => {
+  const files = new Map([['/private/tailscale-display.json', '{broken']]);
+  const { ui, preview } = harness({}, {}, {}, {}, files);
+  await ui.restoreSession(); assert.equal(ui.hasAccount(), true);
+  assert.ok(new preview.SessionPreviewStore('/private').read());
+  await ui.logout(); assert.equal(ui.hasAccount(), false);
+  assert.equal(new preview.SessionPreviewStore('/private').read(), undefined);
+  const reopened = harness({ getStatus: async () => JSON.stringify(loggedOut) }, {}, {}, {}, files).ui;
+  await reopened.restoreSession(); assert.equal(reopened.hasAccount(), false);
+});
+
+test('stored account cannot authorize VPN after live authentication expires', async () => {
+  const { ui, calls, preview } = harness({ getStatus: async () => JSON.stringify(loggedOut) });
+  ui.previewAccount = preview.previewOf(running, [], '').account;
+  await ui.setVpn(true);
+  assert.ok(!calls.includes('vpnStart')); assert.ok(!calls.includes('close'));
+  assert.equal(ui.hasAccount(), false); assert.match(ui.message, /重新认证/);
+});
+
+test('VPN OFF live accounts continue quiet foreground synchronization; background stops timers', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const { ui, calls } = harness(); await ui.restoreSession(); calls.length = 0;
+  assert.equal(ui.vpn.connected, false); assert.notEqual(ui.vpnTimer, -1);
+  t.mock.timers.tick(5000); await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.some((c) => Array.isArray(c) && c[0] === 'peers')); assert.equal(ui.busy, false);
+  ui.backgroundCallback({}); assert.equal(ui.vpnTimer, -1); assert.equal(ui.pollTimer, -1);
+  calls.length = 0; t.mock.timers.tick(15000); assert.deepEqual(calls, []);
+  ui.foregroundCallback({}); await new Promise((resolve) => setImmediate(resolve));
+  assert.notEqual(ui.vpnTimer, -1);
+});
+
+test('temporary reconnection retains details as historical data and restores freshness after recovery', async () => {
+  let reconnecting = false;
+  const { ui } = harness({ getStatus: async () => JSON.stringify({ ...running, backendState: reconnecting ? 'Starting' : 'Running' }) });
+  await ui.restoreSession(); ui.page = 'detail'; ui.selectedPeer = ui.peers[0];
+  const peers = ui.peers, selected = ui.selectedPeer, updated = ui.lastUpdated;
+  reconnecting = true; await ui.refreshData(true);
+  assert.equal(ui.peers, peers); assert.equal(ui.selectedPeer, selected); assert.equal(ui.lastUpdated, updated);
+  assert.equal(ui.peersStale, true); assert.equal(ui.page, 'detail');
+  reconnecting = false; await ui.refreshData(true); assert.equal(ui.peersStale, false);
+});
+
+test('diagnostic pause preserves display and prevents auto polling until explicitly resumed', async () => {
+  const { ui } = harness(); await ui.restoreSession();
+  await ui.diagnostic('close'); assert.equal(ui.hasAccount(), true); assert.equal(ui.corePaused, true);
+  assert.equal(ui.vpnTimer, -1); assert.match(ui.connectionLabel(), /已暂停/);
+  await ui.diagnostic('start'); assert.equal(ui.corePaused, false); assert.equal(ui.peersStale, false);
+});
+
+test('account or Tailnet changes clear the previous account devices before querying the new list', async () => {
+  const { ui } = harness(); await ui.restoreSession(); ui.selectedPeer = ui.peers[0];
+  ui.applyStatus({ ...running, tailnet: { magicDNSSuffix: 'other.ts.net' } });
+  assert.equal(ui.peers.length, 0); assert.equal(ui.selectedPeer, undefined); assert.equal(ui.peersStale, true);
+});
+
+test('fresh successful query of an empty list is distinct from stale query failure', async () => {
+  const { ui } = harness({ onlinePeers: async () => JSON.stringify({ ok: true, peers: [] }) });
+  ui.peers = [onlinePeer]; await ui.restoreSession();
+  assert.equal(ui.peers.length, 0); assert.equal(ui.peersStale, false); assert.ok(ui.lastUpdated);
+});
+
+test('a late startup failure after unmount does not change cached account display or notices', async () => {
+  let rejectStart; const files = new Map(); const setup = harness({}, {}, {}, {}, files);
+  new setup.preview.SessionPreviewStore('/private').write(setup.preview.previewOf(running, [onlinePeer], 'saved'));
+  const { ui } = harness({ start: () => new Promise((_resolve, reject) => { rejectStart = reject; }) }, {}, {}, {}, files);
+  const opening = ui.restoreSession(); ui.message = 'detached'; ui.aboutToDisappear();
+  rejectStart(new Error('late startup error')); await opening;
+  assert.equal(ui.message, 'detached'); assert.equal(ui.hasAccount(), true); assert.equal(ui.pollTimer, -1);
+});
+
+test('cache persistence failures cannot turn a working account or VPN into a connection error', async () => {
+  const { ui } = harness(); await ui.restoreSession();
+  ui.previewStore.write = () => { throw new Error('disk full'); }; ui.persistedPreview = '';
+  await ui.setVpn(true); assert.equal(ui.vpn.connected, true); assert.equal(ui.vpnNeedsCleanup, false);
+  assert.equal(model.isAuthenticated(ui.status), true); assert.match(ui.message, /VPN 已开启/);
 });

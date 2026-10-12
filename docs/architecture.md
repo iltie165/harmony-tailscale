@@ -31,12 +31,19 @@ flowchart TD
 | `core/diagnostics.go` | Probe adapters and failure aggregation | Injectable probes + HTTP faults + real loopback |
 | `entry/.../napi_init.cpp` | Parameters, workers, strings and Promise completion | Actual production source compiled as Node addon |
 | `ClientModel.ets`, `Index.ets` | Wire validation, page state, browser and polling | Actual production methods + mocked platform ports |
+| `SessionPreview.ets` | Atomic whitelisted display cache, never live authentication/VPN proof | Production codec/storage calls + delayed startup, expiry, logout and I/O failure |
 
-A single core instance matches the app's lifecycle. This change deliberately
+One state-owning core runs at a time, but discovery/VPN transitions replace it;
+this is not a permanent singleton across process lifetimes. This change deliberately
 keeps the existing C ABI 3 contracts with additive VPN exports. Factory
 injection exists only inside Go; no mock or test-only ABI is packaged in the app.
 Tests modifying the singleton/factory run serially; concurrency tests use the
 production locks and the Go race detector.
+
+Saved metadata can paint the dashboard before native initialization completes.
+Official status alone determines authentication and readiness, and the owner's
+independent VPN state determines connection. Historical peers are labelled stale.
+See [3.2.4](vpn-3.2.4.md); core ownership/packet lifecycle remain unchanged.
 
 ## Networking
 

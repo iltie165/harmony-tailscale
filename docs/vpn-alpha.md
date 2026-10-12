@@ -1,6 +1,7 @@
 # VPN Alpha — 3.2.0
 
-Latest maintenance release: [3.2.3 live readiness](vpn-3.2.3.md), following
+Latest maintenance release: [3.2.4 display/connection separation](vpn-3.2.4.md), following
+[3.2.3 live readiness](vpn-3.2.3.md),
 [3.2.2 account restoration](vpn-3.2.2.md) and
 [3.2.1 ICMP/UI fixes](vpn-3.2.1.md). On 2026-10-12
 the user confirmed phone-to-home-PC Moonlight streaming works with the system

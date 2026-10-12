@@ -52,7 +52,7 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
-### Client UI and 3.2.1 VPN Alpha
+### Client UI and 3.2.4 VPN Alpha
 
 The Chinese-language client UI separates the welcome/login screen from the
 signed-in device list. It displays the real account, Tailnet, local Tailscale
@@ -73,6 +73,13 @@ services remain separate acceptance items. 3.2.1 adds ACL-filtered local IPv4
 ICMP replies, silent incremental UI updates and edge-to-edge window painting
 with safe content insets. See [VPN Alpha and testing](docs/vpn-alpha.md) and
 [3.2.1 fixes and verification](docs/vpn-3.2.1.md).
+
+3.2.4 separates saved display metadata from live authentication: after one
+successful sync, the next launch can show the account/devices before core
+startup completes. Reconnection keeps explicitly labelled historical devices;
+foreground OFF-mode refreshes silently too. Device-query errors do not negate
+independently confirmed VPN startup. This is a display/state improvement, not
+a permanent-core or background-lifecycle redesign. See [3.2.4](docs/vpn-3.2.4.md).
 
 The opt-in diagnostic remains available separately: a temporary vNIC with no
 routes or DNS override, descriptor/protection checks, and automatic cleanup.
