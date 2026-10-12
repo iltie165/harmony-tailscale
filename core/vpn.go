@@ -89,17 +89,7 @@ func (b *serviceBackend) AttachVPN(fd int, ip netip.Addr) error {
 	if b.lb == nil || b.device == nil {
 		return fmt.Errorf("core is not initialized")
 	}
-	status := b.lb.StatusWithoutPeers()
-	if status.BackendState != "Running" {
-		return fmt.Errorf("core is %s; wait for live readiness", status.BackendState)
-	}
-	assigned := false
-	for _, address := range status.TailscaleIPs {
-		if address == ip {
-			assigned = true
-		}
-	}
-	if !assigned {
+	if assigned := b.readyIPv4(); !assigned.IsValid() || assigned != ip {
 		return fmt.Errorf("VPN address is not assigned to the live core")
 	}
 	device, err := newPacketTun(fd)

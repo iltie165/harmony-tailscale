@@ -52,6 +52,15 @@ HarmonyOS device.
 
 ## Stage HAP runtime probe
 
+### 3.3.4 supplied icon and local-only startup gate
+
+Application/launcher/start-window icons use the supplied blue artwork. The
+startup overlay waits only for local service bootstrap; account and device
+refreshes continue independently. A current authorized, nonexpired netmap with
+the engine-applied IPv4 allows TUN attachment even before peer/DERP-dependent
+Running. Cached display data cannot authorize it. See
+[3.3.4 verification and phone acceptance](docs/ui-3.3.4.md).
+
 ### 3.3.3 platform metadata and startup readiness
 
 The extension reports the system API's actual OpenHarmony/HarmonyOS version

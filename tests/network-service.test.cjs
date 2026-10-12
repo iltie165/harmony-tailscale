@@ -117,6 +117,15 @@ test('expired authentication fails before creating any system interface and reta
   assert.match(h.latest().error,/认证/);assert.ok(!h.calls.includes('create'));assert.ok(!h.calls.includes('closeCore'));
 });
 
+test('authorized native map permits ON before Running without a slow account-status query',async t=>{
+  const h=actorHarness(t,{control:async()=>{throw new Error('must not wait on account query');}});
+  const status=h.port.status;
+  h.port.status=async()=>JSON.stringify({...JSON.parse(await status()),networkMapReady:true,assignedIPv4:'100.64.1.1'});
+  await until(()=>h.latest()?.serviceReady);h.command(true);await until(()=>h.latest()?.connected);
+  assert.ok(h.calls.includes('create'));assert.ok(h.calls.includes('protect'));assert.ok(h.calls.includes('attach'));
+  assert.equal(h.latest().networkMapReady,true);
+});
+
 test('SDK protection failure releases descriptor/network but keeps the initialized core retryable',async t=>{
   let denied=true;const h=actorHarness(t,{protect:async()=>{if(denied)throw new Error('protection denied');}});
   await until(()=>h.latest()?.serviceReady);h.command(true);await until(()=>h.latest()?.phase==='error');

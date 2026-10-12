@@ -186,11 +186,12 @@ struct Index {
         .onChange((enabled: boolean) => { this.setVpn(enabled); })
         .accessibilityText('连接或断开 Tailnet VPN')
     }.width('100%').padding(18).backgroundColor(Color.White).borderRadius(22).margin({ bottom: 22 })
-    Text(`${this.view.status.backendState === 'Running' && this.view.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.model.displayAccount().tailscaleIPs?.join(' · ') || '暂无'}`)
+    Text(this.view.vpn.networkMapReady ? `本机 IP：${this.view.vpn.assignedIPv4}` :
+      `${this.view.status.backendState === 'Running' && this.view.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.model.displayAccount().tailscaleIPs?.join(' · ') || '暂无'}`)
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
       .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
     this.notice()
-    if (this.view.status.backendState !== 'Running') {
+    if (this.view.status.backendState !== 'Running' && !this.view.vpn.networkMapReady) {
       Text(this.view.corePaused ? '网络连接已暂停，账号记录已保留。' : '账号记录已保留，正在核对连接并同步设备…').fontSize(13).fontColor(MUTED)
         .width('100%').margin({ bottom: 16 })
     }
@@ -200,7 +201,7 @@ struct Index {
         .fontColor(BLUE).backgroundColor('#E3EFFF').margin({ bottom: 16 })
     }
     if (this.view.status.health && this.view.status.health.length > 0) {
-      Text(this.view.status.health.join('\n')).fontSize(12).fontColor('#966010')
+      Text(this.model.displayHealth().join('\n')).fontSize(12).fontColor('#966010')
         .width('100%').padding(14).backgroundColor('#FFF4DE').borderRadius(16).margin({ bottom: 16 })
     }
     Row() {
@@ -343,10 +344,10 @@ struct Index {
       Column({ space: 16 }) {
         if (this.view.startupPhase === 'checking') {
           LoadingProgress().width(40).height(40).color(BLUE)
-          Text('正在准备连接').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
-          Text(this.view.progress || '正在读取账号并启动网络服务…').fontSize(14).fontColor(MUTED)
+          Text('正在启动网络服务').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
+          Text(this.view.progress || '正在初始化本地核心…').fontSize(14).fontColor(MUTED)
             .textAlign(TextAlign.Center)
-          Text('完成后即可开启 VPN').fontSize(12).fontColor(MUTED)
+          Text('账号和设备信息将在后台更新').fontSize(12).fontColor(MUTED)
         } else {
           Text('连接尚未就绪').fontSize(20).fontWeight(FontWeight.Medium).fontColor(INK)
           Text(this.view.startupError).fontSize(14).fontColor(MUTED).textAlign(TextAlign.Center)
@@ -361,7 +362,7 @@ struct Index {
       }.width('100%').padding(28).backgroundColor(Color.White).borderRadius(24)
     }.width('100%').height('100%').padding({ left: 24, right: 24, top: this.safeTop, bottom: this.safeBottom })
       .justifyContent(FlexAlign.Center).backgroundColor('#D9EEF6FC')
-      .onClick(() => {}).accessibilityText(this.view.startupPhase === 'checking' ? '正在准备连接，完成后即可开启 VPN' : '连接尚未就绪')
+      .onClick(() => {}).accessibilityText(this.view.startupPhase === 'checking' ? '正在初始化本地网络服务' : '本地服务尚未就绪')
   }
 
   build() {

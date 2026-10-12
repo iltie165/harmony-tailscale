@@ -14,6 +14,8 @@ export class VpnState {
   coreOwner: boolean = false;
   attached: boolean = false;
   startedAt: number = 0;
+  networkMapReady: boolean = false;
+  assignedIPv4: string = '';
 }
 export class VpnSessionReport extends VpnState {
   requestId: string = '';
@@ -39,6 +41,9 @@ export function readVpnState(raw: string): VpnState {
     (s.coreAlive !== undefined && typeof s.coreAlive !== 'boolean') ||
     (s.coreOwner !== undefined && typeof s.coreOwner !== 'boolean') ||
     (s.attached !== undefined && typeof s.attached !== 'boolean') ||
+    (s.networkMapReady !== undefined && typeof s.networkMapReady !== 'boolean') ||
+    (s.assignedIPv4 !== undefined && typeof s.assignedIPv4 !== 'string') ||
+    (s.networkMapReady === true && (!s.coreAlive || !tailnetIPv4(s.assignedIPv4 || ''))) ||
     (s.startedAt !== undefined && (!Number.isFinite(s.startedAt) || s.startedAt < 0)) ||
     (s.connected && (!s.ok || s.state !== 'connected' || !tailnetIPv4(s.ipv4) || s.error !== ''))) {
     throw new Error('Invalid VPN service status');

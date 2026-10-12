@@ -58,6 +58,8 @@ export class NetworkServiceClient {
     const live = readVpnState(await serviceDeadline(this.port.status(),5000,'读取核心健康状态'));
     if (!live.coreAlive || live.coreId!==s.coreId) { throw new NetworkServiceError('网络服务实例已变化，请重新连接',false); }
     if (!fresh(s)) { throw new NetworkServiceError('核心仍在运行，但服务响应超时；请检查系统 VPN 状态',false); }
+    s.networkMapReady = live.networkMapReady === true;
+    s.assignedIPv4 = live.assignedIPv4 || '';
     // Native state is authoritative over a cached connected report.
     if (!live.ok || (s.connected && !live.connected)) {
       s.connected=false;s.state=live.state;s.phase=live.ok?'reconnecting':'error';s.error=live.error;

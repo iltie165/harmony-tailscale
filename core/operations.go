@@ -119,7 +119,12 @@ func onlinePeersCore(filter string) onlinePeersResult {
 		result.Error = "Tailscale returned an empty status"
 		return result
 	}
-	if status.BackendState != "Running" {
+	mapReady := false
+	if provider, ok := server.(vpnStateProvider); ok {
+		live := provider.VPNState(ctx)
+		mapReady = live.OK && live.CoreAlive && live.NetworkMapReady
+	}
+	if status.BackendState != "Running" && !(status.BackendState == "Starting" && mapReady) {
 		result.Error = fmt.Sprintf("Tailscale backend is %q; login must complete before peers are available", status.BackendState)
 		return result
 	}
@@ -191,6 +196,14 @@ func fetchControlStatus(operation string) controlStatusResult {
 	defer cancel()
 	status, err := client.Status(ctx)
 	result := controlStatus(operation, state, status, err)
+	if result.OK && result.BackendState == "Starting" {
+		if provider, ok := server.(vpnStateProvider); ok {
+			live := provider.VPNState(ctx)
+			if live.OK && live.CoreAlive && live.NetworkMapReady {
+				result.LoggedIn = true
+			}
+		}
+	}
 	if !result.OK || result.LoggedIn {
 		return result
 	}

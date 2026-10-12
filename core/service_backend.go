@@ -92,21 +92,23 @@ func (b *leasedBackend) Close() error {
 }
 
 type vpnState struct {
-	OK        bool     `json:"ok"`
-	Connected bool     `json:"connected"`
-	State     string   `json:"state"`
-	IPv4      string   `json:"ipv4"`
-	TxPackets uint64   `json:"txPackets"`
-	RxPackets uint64   `json:"rxPackets"`
-	TxBytes   uint64   `json:"txBytes"`
-	RxBytes   uint64   `json:"rxBytes"`
-	Error     string   `json:"error"`
-	DebugLogs []string `json:"debugLogs,omitempty"`
-	CoreID    string   `json:"coreId,omitempty"`
-	CoreAlive bool     `json:"coreAlive"`
-	CoreOwner bool     `json:"coreOwner"`
-	Attached  bool     `json:"attached"`
-	StartedAt int64    `json:"startedAt,omitempty"`
+	OK              bool     `json:"ok"`
+	Connected       bool     `json:"connected"`
+	State           string   `json:"state"`
+	IPv4            string   `json:"ipv4"`
+	TxPackets       uint64   `json:"txPackets"`
+	RxPackets       uint64   `json:"rxPackets"`
+	TxBytes         uint64   `json:"txBytes"`
+	RxBytes         uint64   `json:"rxBytes"`
+	Error           string   `json:"error"`
+	DebugLogs       []string `json:"debugLogs,omitempty"`
+	CoreID          string   `json:"coreId,omitempty"`
+	CoreAlive       bool     `json:"coreAlive"`
+	CoreOwner       bool     `json:"coreOwner"`
+	Attached        bool     `json:"attached"`
+	StartedAt       int64    `json:"startedAt,omitempty"`
+	NetworkMapReady bool     `json:"networkMapReady"`
+	AssignedIPv4    string   `json:"assignedIPv4,omitempty"`
 }
 type vpnStateProvider interface {
 	VPNState(context.Context) vpnState
@@ -328,6 +330,10 @@ func (b *serviceBackend) VPNState(context.Context) vpnState {
 			s.CoreAlive = true
 		}
 	}
+	if ip := b.readyIPv4(); s.CoreAlive && ip.IsValid() {
+		s.NetworkMapReady = true
+		s.AssignedIPv4 = ip.String()
+	}
 	if b.router != nil {
 		b.router.mu.Lock()
 		if s.Attached {
@@ -347,7 +353,7 @@ func (b *serviceBackend) VPNState(context.Context) vpnState {
 		return s
 	}
 	s.State = "connecting"
-	if b.lb != nil && b.lb.State() == ipn.Running {
+	if s.NetworkMapReady {
 		s.Connected = true
 		s.State = "connected"
 	}

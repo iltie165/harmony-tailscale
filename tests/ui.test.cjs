@@ -198,6 +198,24 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
   return { ui, calls, probeCalls, files, preview };
 }
 
+test('a current native map releases startup and enables VPN while account refresh is pending',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+  let release;
+  const {ui}=harness({getStatus:()=>new Promise(resolve=>{release=resolve;}),getVpnStatus:async()=>JSON.stringify({
+    ...new sessionModel.VpnState(),networkMapReady:true,assignedIPv4:'100.64.1.1'
+  })});
+  ui.previewAccount=running;
+  const opening=ui.restoreSession();
+  for(let i=0;i<20&&!release;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(release);assert.equal(ui.busy,false);assert.equal(ui.startupBlocking(),false);
+  assert.equal(ui.vpnToggleEnabled(),true);assert.match(ui.connectionLabel(),/网络配置已就绪/);
+  release(JSON.stringify({...running,backendState:'Starting',health:['Tailscale is starting. Please wait.','DNS error']}));
+  await opening;
+  assert.equal(ui.peersStale,false);assert.equal(ui.peers.length,1);
+  assert.deepEqual(ui.displayHealth(),['网络配置已就绪，正在建立直连或中继通路。','DNS error']);
+  t.mock.timers.tick(30001);assert.equal(ui.startupBlocking(),false);assert.equal(ui.startupPhase,'ready');
+});
+
 test('main VPN toggle commands a stable service and OFF retains core/account without SDK stop', async () => {
   const { ui, calls } = harness(); ui.status = running;
   await ui.setVpn(true);
@@ -212,27 +230,28 @@ test('main VPN toggle commands a stable service and OFF retains core/account wit
   assert.match(ui.message, /登录已保留/); ui.aboutToDisappear();
 });
 
-test('startup gate blocks ON until live account, Running and IPv4 are ready; peers do not gate VPN', async () => {
+test('local service releases the overlay while missing live VPN readiness only disables ON', async () => {
   let state={...running,backendState:'Starting'};
   const {ui,calls}=harness({getStatus:async()=>JSON.stringify(state),onlinePeers:async()=>{throw new Error('peer sync unavailable');}});
   await ui.restoreSession();
-  assert.equal(ui.startupBlocking(),true);await ui.setVpn(true);assert.equal(ui.vpnWanted(),false);
+  assert.equal(ui.startupBlocking(),false);assert.equal(ui.vpnToggleEnabled(),false);assert.equal(ui.vpnWanted(),false);
   assert.ok(!calls.some(c=>Array.isArray(c)&&c[0]==='serviceCommand'&&c[1]));
   state={...running,tailscaleIPs:['fd7a:115c:a1e0::1']};await ui.refreshData(true);
-  assert.equal(ui.vpnToggleEnabled(),false);assert.equal(ui.startupBlocking(),true);
+  assert.equal(ui.vpnToggleEnabled(),false);assert.equal(ui.startupBlocking(),false);
   state=running;await ui.refreshData(true);
   assert.equal(ui.startupBlocking(),false);assert.equal(ui.vpnToggleEnabled(),true);
   assert.match(ui.message,/peer sync unavailable/);assert.ok(!calls.includes('login'));
 });
-test('startup timeout offers retry/diagnostics and a late live result still releases the gate', async t=>{
+test('local bootstrap timeout offers diagnostics and late bootstrap releases the gate', async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
-  let ready=false;
-  const {ui}=harness({getStatus:async()=>JSON.stringify({...running,backendState:ready?'Running':'Starting'})});
-  await ui.restoreSession();t.mock.timers.tick(30001);await new Promise(resolve=>setImmediate(resolve));
+  let release;
+  const {ui}=harness();
+  ui.ensureService=()=>new Promise(resolve=>{release=resolve;});
+  const opening=ui.restoreSession();t.mock.timers.tick(30001);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(ui.startupPhase,'failed');assert.match(ui.startupError,/30 秒/);assert.equal(ui.startupBlocking(),true);
   ui.dismissStartup();assert.equal(ui.startupBlocking(),false);assert.equal(ui.vpnToggleEnabled(),false);
-  await ui.retryStartup();assert.equal(ui.startupPhase,'checking');assert.equal(ui.startupBlocking(),true);
-  ready=true;await ui.refreshData(true);assert.equal(ui.startupPhase,'ready');assert.equal(ui.startupError,'');
+  await ui.retryStartup();assert.equal(ui.busy,true);
+  release();await opening;assert.equal(ui.startupPhase,'ready');assert.equal(ui.startupError,'');
 });
 test('expired credentials release startup overlay and invalidate cached login; machine approval is explicit',async()=>{
   for(const backendState of ['NeedsLogin','NeedsMachineAuth']) {
@@ -246,7 +265,7 @@ test('expired credentials release startup overlay and invalidate cached login; m
 test('startup query failures do not leave an endless spinner or authorize VPN using the cache',async()=>{
   const {ui}=harness({getStatus:async()=>{throw new Error('control unavailable');}});
   ui.previewAccount=running;await ui.restoreSession();
-  assert.equal(ui.startupPhase,'failed');assert.equal(ui.busy,false);assert.match(ui.startupError,/control unavailable/);
+  assert.equal(ui.startupPhase,'ready');assert.equal(ui.startupBlocking(),false);assert.equal(ui.busy,false);assert.match(ui.message,/control unavailable/);
   assert.equal(ui.vpnToggleEnabled(),false);assert.equal(ui.hasAccount(),true);
 });
 test('control reconnection after readiness never restores a global overlay and OFF stays available',async()=>{
@@ -595,7 +614,7 @@ test('cold launch restores saved account before Running and silently continues a
   const { ui, calls } = harness({ getStatus: async () => JSON.stringify({ ...running, backendState: ready ? 'Running' : 'Starting' }) });
   await ui.restoreSession();
   assert.equal(ui.restoringSession, false);
-  assert.equal(ui.startupBlocking(), true); assert.equal(ui.vpnToggleEnabled(), false);
+  assert.equal(ui.startupBlocking(), false); assert.equal(ui.vpnToggleEnabled(), false);
   assert.equal(model.isAuthenticated(ui.status), true);
   assert.equal(ui.vpn.connected, false);
   assert.equal(ui.peers.length, 0);
@@ -779,7 +798,7 @@ test('periodic VPN timer uses silent refresh and leaves the existing notice inta
   ui.aboutToDisappear();
 });
 
-test('VPN command waits for in-flight refresh and never closes the backend', async () => {
+test('VPN command does not wait for in-flight account refresh and never closes the backend', async () => {
   let release;
   let first = true;
   const { ui, calls } = harness({ getStatus: async () => {
@@ -793,7 +812,7 @@ test('VPN command waits for in-flight refresh and never closes the backend', asy
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(ui.busy, true); assert.ok(!calls.includes('close'));
   release(); await Promise.all([refresh, switching]);
-  assert.ok(calls.findIndex(c=>Array.isArray(c)&&c[0]==='serviceCommand') > calls.findIndex((c) => Array.isArray(c) && c[0] === 'peers')); assert.ok(!calls.includes('close'));
+  assert.ok(calls.findIndex(c=>Array.isArray(c)&&c[0]==='serviceCommand') < calls.findIndex((c) => Array.isArray(c) && c[0] === 'peers')); assert.ok(!calls.includes('close'));
   assert.equal(ui.vpn.connected, true); assert.equal(ui.busy, false);
   ui.aboutToDisappear();
 });

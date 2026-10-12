@@ -36,9 +36,11 @@ export class PlatformVpnRecovery implements VpnRecoveryPort {
     this.onState(owner);
     // A temporary control outage with an intact data path needs no teardown.
     if (owner.connected && environment.ownVpn) { return; }
-    const control = readControl(await serviceDeadline(tailscale.getStatus(), 5000, '核对 VPN 认证状态'));
-    if (!current()) { return; }
-    if (!isAuthenticated(control)) { throw new RecoveryBlocked('账号需要重新认证，自动恢复已暂停'); }
+    if (!owner.networkMapReady) {
+      const control = readControl(await serviceDeadline(tailscale.getStatus(), 5000, '核对本地账号状态'));
+      if (!current()) { return; }
+      if (!isAuthenticated(control)) { throw new RecoveryBlocked('账号需要重新认证，自动恢复已暂停'); }
+    }
     // Native attached + OS interface missing requires explicit repair. Merely
     // reconnecting to the control server must never destroy an intact TUN.
     if (owner.attached && environment.ownVpn && owner.ok) { throw new Error('原核心正在恢复连接'); }

@@ -136,10 +136,16 @@ export class NetworkServiceActor {
     this.publish(port,s);
     if (error) { throw new Error(error); }
   }
-  private async enable(port: NetworkServicePort, s: ServiceSnapshot, control: ControlResult): Promise<void> {
-    if (!isAuthenticated(control)) { throw new ServiceBlocked('authentication_required', '账号需要重新认证，请先登录'); }
-    const ipv4 = control.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip));
-    if (control.backendState !== 'Running' || !ipv4) {
+  private async enable(port: NetworkServicePort, s: ServiceSnapshot, local: VpnState): Promise<void> {
+    if (!local.coreAlive || local.coreId !== s.coreId) { throw new Error('Core process/generation changed'); }
+    if (!local.ok) { throw new Error(local.error || 'Packet path failed'); }
+    let ipv4 = local.networkMapReady ? local.assignedIPv4 : '';
+    if (!ipv4) {
+      const control = readControl(await port.control());
+      if (!isAuthenticated(control)) { throw new ServiceBlocked('authentication_required', '账号需要重新认证，请先登录'); }
+      ipv4 = control.backendState === 'Running' ? control.tailscaleIPs?.find((ip: string) => tailnetIPv4(ip)) || '' : '';
+    }
+    if (!tailnetIPv4(ipv4)) {
       s.phase = 'waiting_core'; s.state = 'connecting'; this.publish(port,s); return;
     }
     this.check(port,s);
@@ -188,13 +194,14 @@ export class NetworkServiceActor {
             s.stopReason = 'user_off'; await this.cleanup(port,s);
           }
           if (s.desiredEnabled && s.commandId !== this.blockedCommand && s.detached && s.destroyed && s.descriptorClosed) {
-            const control = readControl(await port.control());
+            const local = readVpnState(await port.status());
             this.accept(port,s);
-            if (s.desiredEnabled && !this.cancelled) { await this.enable(port,s,control); }
+            if (s.desiredEnabled && !this.cancelled) { await this.enable(port,s,local); }
           }
           const current = readVpnState(await port.status());
           if (!current.coreAlive || current.coreId !== s.coreId) { this.cancel('core_failed'); throw new Error('Core process/generation changed'); }
           if (!current.ok) { throw new Error(current.error || 'Packet path failed'); }
+          s.networkMapReady = current.networkMapReady === true; s.assignedIPv4 = current.assignedIPv4 || '';
           if (s.desiredEnabled && !s.detached) {
             if (!current.attached) { throw new Error('System VPN interface lost'); }
             s.connected = current.connected; s.attached = current.attached;
