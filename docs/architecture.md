@@ -63,7 +63,7 @@ Login, OFF-state restoration and device refresh cannot initiate that extension
 authorization. Only explicit ON may bootstrap an absent extension. Recovery of
 an existing core/interface remains automatic; a missing host pauses for user
 action instead of risking a background authorization dialog. No vNIC/routes
-are installed before ON. See [3.4.0 interaction and phone acceptance](ui-3.4.0.md).
+are installed before ON. See [3.4.0 interaction and phone acceptance](releases/ui-3.4.0.md).
 
 The existing C ABI 3 contracts are preserved with additive service exports. Factory
 injection exists only inside Go; no mock or test-only ABI is packaged in the app.
@@ -73,7 +73,7 @@ production locks and the Go race detector.
 Saved metadata can paint the dashboard before native initialization completes.
 Official status alone determines authentication and readiness, and the owner's
 independent VPN state determines connection. Historical peers are labelled stale.
-See [3.2.4](vpn-3.2.4.md) for the earlier display-cache change.
+See [3.2.4](releases/vpn-3.2.4.md) for the earlier display-cache change.
 
 The UI verifies private service snapshots against live native engine identity
 and health. A stale heartbeat alone does not authorize killing a healthy core.

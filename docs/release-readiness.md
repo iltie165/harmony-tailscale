@@ -1,91 +1,31 @@
-# First release readiness
+# 当前发布状态
 
-Updated: 2026-10-10, VPN Alpha 3.2.0 implementation. Login/device discovery and
-basic VPN interface capabilities have phone evidence. Real TUN integration,
-service ownership and main ON/OFF are now implemented and host/target verified;
-**new phone traffic acceptance is still outstanding**. See [details](vpn-alpha.md).
+更新：2026-10-14。源码应用版本 **3.4.1 / versionCode 3004001**，Alpha。
 
-## Confirmed scope
+## 已有证据
 
-The user selected the functional VPN Alpha on 2026-10-10. A login-only preview
-is not the release target.
+- 维护者已选定 [MIT License](../LICENSE)，自有代码和文档许可已落实；
+  第三方代码、SDK 和素材的条款独立保留。
+- 3.4.1 已记录完整 345 项回归、ARM64/ArkTS/HAP 构建与签名验签。
+  [交付记录](releases/ui-3.4.1.md) 区分宿主、编译与手机证据。
+- 3.0.6 的真实登录/设备查询与 3.2.0 的 Moonlight 使用有用户反馈。
+- 保留 `com.ezoo.tailscaleprobe` 的 bundle identity 与版本递增，避免已有
+  安装、私有账号状态和签名升级链被目录整理破坏。
+- 已有签名包是授权设备的 debug HAP，不是公共发行版。
+- 仓库含 CI 配置；尚未证明可信 runner 已部署或远程全量检查已运行。
 
-The first useful VPN release is an **Alpha**: official login, existing
-device discovery, and real IPv4 TCP/UDP access to Tailnet peers from other apps
-through a user-authorized HarmonyOS VPN extension. Route only the supported
-Tailnet destinations; preserve ordinary Internet access and existing system DNS.
-Do not include exit nodes, subnet routing, MagicDNS, IPv6, always-on startup,
-Taildrive, SSH server or policy-group management in the initial promise.
+## 公开发布前的门槛
 
-The interim 3.1.4 probe was phone-confirmed but did not forward packets. The new
-3.2.0 switch starts the actual data path; its diagnostic remains capability-only.
-
-## Existing evidence
-
-- Official login and online-peer discovery were user-confirmed on a real phone
-  with version 3.0.6.
-- Current 3.1.0 UI/refactor has the documented 113 passing server cases and actual
-  ARM64/ArkTS/HAP compilation. New UI layout/foreground behavior is not yet
-  device-accepted. See `server-verification-2026-10-10.md` and `device-test.md`.
-- GitHub `main` preserves the original history. The self-hosted check workflow
-  is present; runner deployment and remote CI execution are not verified.
-- Current signing script uses a debug key/profile outside the repository. This
-  is not evidence of a generally installable public binary release.
-
-## Remaining work and gates
-
-| Priority | Work | Exit criterion |
+| 优先级 | 工作 | 完成条件 |
 | --- | --- | --- |
-| P0 | Target-phone packet capability | Acquisition, access flags/protection API and cleanup passed in 3.1.4; actual read/write must be accepted in 3.2.0 |
-| Implemented | Official Tailscale packet integration | Real pinned-engine IPv4 TCP/UDP packet encryption/decryption passed offline; phone OS/app flows remain unverified |
-| Implemented / device pending | Physical-network exclusion, routes and FD ownership | Protected extension transport, Tailnet IPv4-only route, duplicate ownership and joined shutdown implemented; actual exclusion/routing awaits phone evidence |
-| Implemented / device pending | VPN lifecycle and UI contract | Single state owner, private LocalAPI, ON/OFF/logout/reconnect and explicit uncertain cleanup implemented/tested; mobile background/revocation still pending |
-| P0 | Real data-path acceptance | Another phone app reaches a Tailnet peer over TCP and UDP; direct and DERP paths, network loss/change, screen-off and stop/start behavior have evidence |
-| P0 | Public artifact and install/upgrade path | Distribution channel, certificate/profile and eligible devices established; version/bundle strategy preserves intended upgrades; signed package and checksum verified |
-| P0 | Release metadata and notices | Choose our own source license, review dependency licenses/notices and unofficial product naming; document supported scope, known limitations and logs/data behavior |
-| P1 | Release automation and repeatability | Release-mode packaging and unambiguous versioned artifact naming; release manifest/checksums; a verified trusted CI route or recorded local full gate |
-| Later | MagicDNS, IPv6, exit nodes/subnets, always-on | Each added platform capability has its own acceptance and failure behavior |
+| P0 | 第三方及素材授权 | 链接依赖/运行时 notice 审查；图标来源/再分发许可明确 |
+| P0 | 3.4.1 真机验收 | 首次允许/拒绝/取消、暖态 ON/OFF、网络切换与业务流量证据 |
+| P0 | 公共安装/升级渠道 | 非设备受限的合法签名方式、支持设备、安装/升级/卸载说明 |
+| P1 | 新机器复现 | SDK/Go 来源和固定版本、公开镜像配方/digest、缓存准备流程 |
+| P1 | 正式 release 流程 | 验证 release-mode 构建、版本 tag、源 commit、校验和与 notices/SBOM |
+| P1 | 维护配置 | 启用并验证 CI runner、分支规则、私密安全报告渠道 |
+| P1 | 隐私/可访问性 | 核验上游日志和数据流；真机屏幕、对比度、字号、辅助技术验收 |
 
-Server-first tests remain required for state transitions, packet adapter
-contracts, cancellation, FD cleanup, route conversion and NAPI/UI contracts.
-Only the new platform boundary and actual traffic require focused device tests;
-Mock/host execution is never labelled device VPN evidence.
-
-## Technical findings behind the order
-
-- `core/backend.go` creates `tsnet.Server` only in discovery mode. Pinned upstream tsnet
-  initializes a userspace engine without a real `Tun`, `Router` or `DNS`
-  configurator and adds its own netstack. A system-VPN adapter requires a
-  separate integration, now implemented in `service_backend.go`/`packet_tun.go`.
-- `wgengine.Config` in pinned upstream exposes `Tun`, `Router`, `DNS` and
-  `ReconfigureVPN` boundaries. The new backend supplies its real Tun and
-  platform Router and starts ipnlocal directly; it does not mutate tsnet.Sys().
-- The installed SDK declares `VpnExtensionAbility`, `VpnConnection.create`
-  returning the vNIC FD and `protect(socketFd)` since API 11.
-  `protectProcessNet()` is declared since API 22. Runtime support on our phone
-  completed in the 3.1.4 phone probe; actual physical-traffic exclusion still
-  needs proof. Do not require API-26 authorization observers on API 24.
-- `core/runtime.go` currently disables Linux netns socket controls for the
-  proven userspace login path. It is not a VPN bypass/protection adapter.
-- Extension/UI ownership works with either shared or separate native processes:
-  a lifetime state lease and private Unix LocalAPI prevent concurrent state opens.
-- App metadata uses `com.ezoo.tailscaleprobe` and version 3.2.0. Public
-  tag naming can differ, but Android-style semantic expectations must not cause
-  a downgrade of the HarmonyOS versionCode; changing bundle identity also
-  changes signing and app-private state/upgrade behavior.
-- Existing build scripts produce debug probe-named artifacts. The fixed signed
-  name is kept for the user's download workflow; older packages are backed up.
-  A public release still needs its own manifest and generally usable signing.
-
-## Implementation sequence
-
-1. Small VPN capability proof: authorization, extension lifecycle, vNIC FD and
-   physical-network protection. No claim of Tailscale traffic yet.
-2. Minimal packet adapter: one peer TCP/UDP flow, then direct/DERP and stop/start.
-3. Integrate the service, supported route configuration and UI state with
-   server regression gates; accept network-change/background behavior on device.
-4. Finalize legal/product metadata, signing/distribution, release artifacts and
-   reproducible evidence; publish an explicitly scoped Alpha.
-
-Do not spend the first milestone on cosmetic file splitting or promise stable
-VPN functionality before the packet and mobile lifecycle gates pass.
+[开源准备审查](project-readiness.md) 记录本次结构改动；
+[路线图](roadmap.md) 记录后续顺序。旧的 3.2.0 发布分析保存在
+[历史报告](archive/release-readiness-2026-10-10.md)，不作为当前状态。

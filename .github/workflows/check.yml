@@ -13,6 +13,11 @@ jobs:
   check:
     # Provision this trusted runner with the existing images and module cache.
     # The workflow does not install SDKs, fetch modules, sign, or use a phone.
+    # Opt in after provisioning. External fork PRs use source.yml only.
+    if: >-
+      vars.HARMONY_CI_ENABLED == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64, harmonyos]
     timeout-minutes: 30
     env:

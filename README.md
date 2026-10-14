@@ -1,229 +1,83 @@
 # harmony-tailscale
 
-HarmonyOS ARM64 C ABI wrapper and Stage-model client shell for the official
-Tailscale Go core.
+非官方的 HarmonyOS ARM64 Tailscale 客户端，基于官方 Go 核心、ArkUI 与
+系统 VPN 扩展。与 Tailscale Inc.、华为无隶属或官方背书关系。
 
-This is an unofficial community project, not an official Tailscale or Huawei client.
+**当前版本：3.4.1 · Alpha**。源码、测试和目标构建已有验证；3.4.1 的首次
+系统授权、界面及网络切换效果仍待真机验收。现有签名包是设备受限的调试包，
+不是可供所有手机安装的正式发行版。详见 [发布状态](docs/release-readiness.md)。
 
-## Engineering and tests
+## 功能与边界
 
-```bash
-make test    # offline unit/Mock/race + real host C ABI/NAPI + UI contracts
-make check   # all tests plus actual ARM64/ArkTS/HAP build
-```
+- 官方浏览器登录、账号恢复、在线设备查询、名称/用户/标签筛选及设备详情。
+- 显式开启 VPN 后使用系统扩展，将其他应用的 Tailnet IPv4 流量交给官方
+  WireGuard 引擎；不添加默认路由，也不覆盖系统 DNS。
+- 登录不请求 VPN 授权；正常 ON/OFF 保留账号和健康核心，开关反映实际接口状态。
+- IPv4 TCP/UDP 与有限的本地 ICMP 应答；日志与诊断对认证 URL 做脱敏。
+- **未支持**：MagicDNS、IPv6、出口节点、子网路由、开机自启/保证常驻、SSH
+  服务端、Taildrive、策略组管理。后台/锁屏行为不承诺稳定。
 
-No phone, Tailscale account, signing password or new packages are needed.
-See [contribution rules](CONTRIBUTING.md), [architecture](docs/architecture.md)
-and [test boundaries](docs/testing.md). CI configuration is checked in for a
-pre-provisioned HarmonyOS self-hosted runner; it has not been deployed here.
+历史真机反馈包含 3.0.6 登录/设备查询与 3.2.0 Moonlight 使用；不能把这些
+证据当作 3.4.1 已完成真机验证。
 
-## Pinned inputs
+## 快速开始
 
-- Tailscale module: `tailscale.com v1.86.2`
-- Tailscale tag commit: `d72494bac7a2fb6b6a01715cfc5bcc903dbd7594`
-- Required Go version: `1.24.4` (the build image currently provides `1.24.5`)
-- Build image: `harmonyos-go:1.24`
-- Target: `GOOS=openharmony GOARCH=arm64 CGO_ENABLED=1`
-
-## Build
-
-Dependencies must already exist in `.cache/gomod`; the build keeps
-`GOPROXY=off` and `-mod=readonly` so the pinned dependency graph cannot change.
-All normal build/test/verification containers default to offline networking.
-Use `HARMONY_GOMODCACHE` to point to an alternate pre-hydrated absolute module
-cache. Hydration remains a separate explicitly authorized step; builds do not
-install dependencies.
+面向 Linux x86-64 开发环境。需要预先准备专用工具链镜像和模块缓存；
+**新 clone 不会自动安装 SDK 或下载依赖**。准备步骤和当前复现缺项见
+[构建指南](docs/building.md)。
 
 ```bash
-./scripts/build.sh
+git clone https://github.com/iltie165/harmony-tailscale.git
+cd harmony-tailscale
+make lint       # 文档链接、目录、脚本语法及源文件规范；无需 SDK
+make doctor     # 只读检查本机工具链/镜像/缓存
+make test       # 离线 Go race/vet、C ABI/NAPI 与 UI 回归
+make check      # 上述检查 + ARM64/ArkTS 编译及 HAP 内容核对
 ```
 
-Successful output is written to:
+构建产物在 `dist/`；`make build` 输出未签名 HAP。签名与设备安装是独立步骤，
+参见 [设备验收](docs/device-test.md)。不要把私钥、配置凭据或调试包提交到 Git。
 
-- `dist/libtailscale_ohos.so`
-- `dist/libtailscale_ohos.h`
-
-The build script automatically checks the ELF architecture, exported C ABI,
-dynamic dependencies, Go module metadata, TLS relocations, retention of the
-`tsnet.Server.Start` core entry point, and a Native C++ cross-link smoke test.
-
-Compilation success does not imply successful loading or operation on a real
-HarmonyOS device.
-
-## Stage HAP runtime probe
-
-### 3.4.0 independent login, devices and VPN consent
-
-Login and account restoration run a permission-free foreground official core,
-or reuse an already healthy VPN host. Only explicit VPN ON requests system
-consent and an exclusive same-identity handoff to the extension. Device queries
-have independent loading/error state; connection has progress/cancel/retry and
-the switch reflects actual interface state. Normal OFF retains the account and
-warm core. See [implementation and acceptance](docs/ui-3.4.0.md).
-
-### 3.3.5 local service bootstrap recovery and dark icon
-
-Local socket refusal during extension bootstrap is retried without restarting
-the owner or clearing credentials. A failed UI proxy is discarded before the
-next dial, and diagnostic service startup releases the failed startup overlay.
-Application/launcher/start-window icons now use the latest supplied original
-dark PNG. See [3.3.5 verification and phone acceptance](docs/ui-3.3.5.md).
-
-### 3.3.4 supplied icon and local-only startup gate
-
-Application/launcher/start-window icons use the supplied blue artwork. The
-startup overlay waits only for local service bootstrap; account and device
-refreshes continue independently. A current authorized, nonexpired netmap with
-the engine-applied IPv4 allows TUN attachment even before peer/DERP-dependent
-Running. Cached display data cannot authorize it. See
-[3.3.4 verification and phone acceptance](docs/ui-3.3.4.md).
-
-### 3.3.3 platform metadata and startup readiness
-
-The extension reports the system API's actual OpenHarmony/HarmonyOS version
-and device model instead of Linux uname metadata. Saved login/display records
-remain behind a startup readiness overlay until live account, Running core and
-IPv4 are confirmed. Timeout/failure offers retry and diagnostics; later control
-reconnections do not block the whole page. Go/Tailscale versions are unchanged.
-See [3.3.3 verification and phone acceptance](docs/ui-3.3.3.md).
-
-### 3.3.2 bottom safe-area background
-
-The root background explicitly extends into the system/cutout safe areas, and
-the window surface uses the page's bottom color before content is loaded.
-Content retains its existing safe insets; system bars/gesture indicator remain
-visible. Core and recovery behavior is unchanged. See
-[3.3.2 verification and phone acceptance](docs/ui-3.3.2.md).
-
-### 3.3.1 automatic VPN recovery Alpha
-
-Persistent user ON intent and a page-independent app-runtime supervisor now
-restore lost interfaces on a live core or recover a stopped service generation.
-Transient failures use bounded backoff; OFF/logout fence pending work. Auth or
-permission denial and another visible VPN pause recovery. System interface
-confirmation is required, but background execution and phone restart behavior
-are not yet device-verified. See [3.3.1 behavior and evidence](docs/vpn-3.3.1.md).
-
-### Client UI and 3.3.0 unified-core Alpha
-
-3.3.0 moves login, discovery and VPN into one extension-owned service. The
-page is a view over a shared client controller. Normal ON/OFF creates/protects/
-attaches or detaches/destroys the platform vNIC; it does not restart the official
-engine or relinquish its state lease. UI startup connects to a healthy existing
-owner; only confirmed engine failure/process loss needs recovery. Saved display
-metadata is still not live authentication or VPN proof.
-
-The first service bootstrap may require system VPN-service consent even while
-the product toggle is OFF. No Tailnet vNIC is created until ON. Warm OFF keeps
-the core/control connection, so this is not a zero-background-resource mode.
-HarmonyOS may terminate the extension; residency while OFF, phone SDK behavior
-and background streaming are **not yet verified on a phone**. See
-[3.3.0 architecture, evidence and acceptance](docs/vpn-3.3.0.md).
-
-The Chinese-language client UI separates the welcome/login screen from the
-signed-in device list. It displays the real account, Tailnet, local Tailscale
-IPs and visible online peers, with OS icons, name/tag/user filters and device
-details. Returning from browser authentication refreshes the session automatically.
-Existing sessions are restored on launch; bounded polling handles asynchronous
-backend startup. Settings contains diagnostics and selectable raw results.
-
-The main VPN switch attaches the node's assigned IPv4 and Tailnet-only route
-to the service's official WireGuard engine. OFF preserves
-login and destroys the owned interface after joining packet I/O. UI/extension
-ownership uses a state lease and private Unix LocalAPI, not duplicate nodes.
-No default route or system DNS override is installed. MagicDNS, IPv6, exit nodes
-and subnet routes are outside this Alpha. Host encrypted packet tests and actual
-target builds passed. The user has confirmed Moonlight streaming from the phone
-to the home PC on 3.2.0; screen-off, network transitions and reverse listening
-services remain separate acceptance items. 3.2.1 adds ACL-filtered local IPv4
-ICMP replies, silent incremental UI updates and edge-to-edge window painting
-with safe content insets. See [VPN Alpha and testing](docs/vpn-alpha.md) and
-[3.2.1 fixes and verification](docs/vpn-3.2.1.md).
-
-3.2.4 separates saved display metadata from live authentication: after one
-successful sync, the next launch can show the account/devices before core
-startup completes. Reconnection keeps explicitly labelled historical devices;
-foreground OFF-mode refreshes silently too. Device-query errors do not negate
-independently confirmed VPN startup. This is a display/state improvement, not
-a permanent-core or background-lifecycle redesign. That limitation describes
-the historical 3.2.4 release, superseded by 3.3.0 above. See [3.2.4](docs/vpn-3.2.4.md).
-
-The opt-in diagnostic remains available separately: a temporary vNIC with no
-routes or DNS override, descriptor/protection checks, and automatic cleanup.
-It does not forward Tailnet packets and cannot run alongside the real VPN.
-The diagnostic is under **设置 → 诊断与日志 → 验证系统 VPN 能力**.
-See [probe acceptance and verification](docs/vpn-capability-probe.md).
-
-Run production UI method/response-contract tests with mocked native APIs:
-
-```bash
-./scripts/test-ui.sh
-```
-
-Tests run offline using the existing Node/TypeScript compiler in
-`harmonyos-dev:24.04`; no dependency installation is needed. They cover session
-restore, browser dispatch, foreground refresh, bounded polling, backend errors,
-stale-device clearing, logout and navigation. They do **not** render ArkUI or
-replace device layout/browser/network acceptance. Hvigor separately compiles
-the complete ArkUI builders.
-
-The current fixed signed artifact is `dist/hap/tailscale-probe-signed.hap`,
-version **3.2.1**. Its existing device-scoped debug signing materials are outside
-the repository; passwords are used transiently, never stored in code or Git.
-
-The `entry` module implements this call chain:
+## 工程布局
 
 ```text
-Discovery: ArkTS UI -> NAPI worker -> Go C ABI -> tsnet.Server
-VPN: ArkTS extension -> NAPI worker -> Go C ABI -> wgengine/ipnlocal <-> TUN
-UI: private Unix LocalAPI -> authoritative VPN owner
+.
+├── AppScope/                  # HarmonyOS 应用身份、版本和全局资源
+├── entry/                     # 标准 Stage 模块（保留 SDK 约定）
+│   └── src/main/
+│       ├── ets/entryability/  # 应用/窗口生命周期
+│       ├── ets/pages/         # ArkUI 页面、共享控制器和账号视图模型
+│       ├── ets/vpn/           # 服务 actor、私有 IPC、VPN/恢复状态机
+│       ├── cpp/               # 异步 NAPI 桥接与 FD 所有权
+│       └── resources/         # 图标、字符串和页面声明
+├── core/                      # Go C ABI、官方核心适配、账号/包转发逻辑
+├── tests/                     # 跨语言/平台边界回归；Go 测试与源码同目录
+├── scripts/                   # 检查、构建、签名和设备工具
+├── docs/                      # 当前维护指南与统一索引
+│   ├── releases/              # 历史版本说明和对应验收边界
+│   └── archive/               # 历史设计、审查与实验记录
+├── third_party/               # 上游许可证/专利授权原文，不含 SDK/依赖源码
+├── patches/                   # 有依据的上游补丁记录（当前无补丁）
+└── .github/                   # CI、Issue 表单与 PR 模板
 ```
 
-It provides native version/core checks, asynchronous `tsnet.Server.Start`,
-official interactive Tailscale login, control-plane status/logout, online peer
-listing, platform diagnostics, lifecycle close, and a bounded Go log buffer.
-The state directory is always the app's private `filesDir/tailscale`, and the
-hostname is supplied by the UI. No auth key or management credential is
-embedded in the project. Short-lived login URLs are returned only to ArkTS for
-opening in the system browser and are redacted from Go/HiLog output.
+Go `core/` 是 `c-shared` 的 main 包，不为目录美观拆成重复状态所有者；
+`entry/`、`AppScope/`、Hvigor 配置和 bundle identity 保持现有兼容性。
+缓存、编译输出、测试证据和设备日志不属于源码目录。
 
-Interactive login listens for the official IPN Bus `BrowseToURL` notification
-instead of polling a status snapshot. Diagnostics test the control `/key?v=123` HTTPS endpoint through the netns
-dialer family so transport failures are reported separately from browser launch
-failures and do not repeat the old unrelated default-HTTP probe.
+## 文档与参与
 
-Online peers can be listed without a filter, filtered by ACL tag such as
-`tag:server`, by login/display name with `user:name`, or by hostname text. ACL
-policy groups (`group:example`) are not exposed by the node LocalAPI and require
-a separate management backend using Tailscale OAuth; an OAuth client secret
-must never be embedded in the HAP.
+- [文档导航](docs/README.md) · [架构与契约](docs/architecture.md)
+- [贡献指南](CONTRIBUTING.md) · [测试边界](docs/testing.md)
+- [更新记录](CHANGELOG.md) · [后续计划](docs/roadmap.md)
+- [问题与支持](SUPPORT.md) · [安全报告](SECURITY.md)
+- [第三方说明](THIRD_PARTY.md) · [开源准备审查](docs/project-readiness.md)
 
-Build the Go library and unsigned debug HAP offline using existing caches:
+## 许可证
 
-```bash
-./scripts/build-hap.sh
-```
+本项目自有代码与文档采用 [MIT License](LICENSE)。使用及再分发时请保留
+版权和许可声明。
 
-The first dependency hydration may require an explicitly authorized networked
-step. Routine builds do not access that network. Output:
-
-```text
-dist/hap/tailscale-probe-unsigned.hap
-```
-
-The HAP build verifies that both native libraries are packaged as AArch64,
-that the NAPI library depends on `libtailscale_ohos.so`, that the Go start
-symbol is exported, and that no `R_AARCH64_TLS_TPREL64` relocation is present.
-
-Sign the generated HAP with the device-valid profile under
-`/home/zackli/harmony-signing` without storing passwords in the repository:
-
-```bash
-export HARMONY_KEYSTORE_PASSWORD='...'
-# Set HARMONY_KEY_PASSWORD only when it differs from the keystore password.
-./scripts/sign-hap.sh
-unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
-```
-
-The result is `dist/hap/tailscale-probe-signed.hap`. See
-[`docs/device-test.md`](docs/device-test.md) for deployment and log capture.
+第三方代码、SDK 和素材不因本项目采用 MIT 而改变原有许可。上游 Tailscale
+的 BSD-3-Clause 与附加专利授权原文在 `third_party/tailscale/`；图标再分发
+授权仍待确认。详见 [第三方说明](THIRD_PARTY.md)。

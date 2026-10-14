@@ -1,57 +1,70 @@
-# Development workflow
+# Contributing
 
-## Prerequisites (already present on the development server)
+This is an unofficial Alpha integration. Start with [scope](README.md),
+[architecture](docs/architecture.md) and [build setup](docs/building.md).
+Use Chinese or English in Issues and PRs. Follow respectful, technical discussion;
+report abusive behavior to the repository maintainer through available GitHub
+channels. No moderation team or response SLA is implied.
 
-- Bash, Make, Python 3 and Docker.
-- Images `harmonyos-go:1.24` and `harmonyos-dev:24.04`, including SDK, host GCC,
-  Node/TypeScript and OpenHarmony-aware Go. Gates never install packages.
-- Pre-hydrated, verified module cache at `.cache/gomod`, or an absolute
-  `HARMONY_GOMODCACHE` path. Build caches stay in `.cache/gobuild*`.
-- HAP/Hvigor package metadata must be hydrated beforehand. An empty/new runner
-  is not automatically hydrated by CI; installation or environment changes
-  require explicit authorization.
+## Environment and commands
 
-## Daily commands
+Bash, Git, Make and Python 3 are sufficient for `make lint`. The full offline
+regression needs the pre-provisioned Docker images, fixed module cache and SDK
+metadata documented in the build guide. Verification never hydrates dependencies.
 
 ```bash
-make test        # offline server regression, no device/account/secrets
-make test-ui     # UI-only; Go contract fixture check skips if not generated
-make check       # required full gate, including ARM64, ArkTS and HAP
+make lint       # source syntax, local documentation links and project hygiene
+make doctor     # read-only local prerequisites, no downloads
+make test-ui    # production logic with mocked platform ports
+make test       # Go race/vet/coverage, actual host C ABI/NAPI, UI contracts
+make check      # full gate plus real ARM64/ArkTS/HAP target compilation
 ```
 
-Use `HARMONY_GO_IMAGE`/`HARMONY_DEV_IMAGE` only for an intentional toolchain
-change. Normal Go builds and all tests/inspection run with `--network none`,
-`GOPROXY=off`, `GOSUMDB=off`, and `-mod=readonly`; module cache mounts read-only.
-Hvigor also defaults to `--network none`. Dependency hydration is a separate,
-explicitly authorized operation, not a fallback when tests fail.
+A new contributor cannot yet reproduce all toolchain provisioning from this
+repository alone; see the explicit [gaps](docs/project-readiness.md). A missing
+SDK is not a reason to manufacture device or target-build evidence.
 
 ## Change procedure
 
-1. Read the existing implementation and response contract.
-2. Add a failing behavior/edge-case regression at the affected layer.
-3. Make the smallest change, keeping upstream code and ABI version stable unless
-   the external contract intentionally changes.
-4. Run `make check`. Retain machine-readable Go results, statement coverage,
-   NAPI log evidence and HAP payload verification.
-5. Review the diff for ownership/lifecycle/error regressions. State any platform
-   acceptance still pending; never ask the user to debug ordinary business logic
-   that can be exercised with injected ports on the server.
-6. Signing/distribution is independent. Do not overwrite the last known signed
-   release with an unsigned file. Do not store P12 passwords or private keys.
+1. Open an Issue for a substantial design/behavior change; use small focused PRs.
+2. Read the existing implementation and producer/consumer contract before editing.
+3. For a behavior bug, add a failing runtime regression at the affected boundary.
+4. Keep upstream pins, C ABI ownership and single-core state lease intact. Avoid
+   unrelated dependency, system, signing or bundle identity changes.
+5. Run `make check` for behavior or build changes. Documentation/template-only
+   changes need `make lint`; state unrun target/device checks explicitly.
+6. Review errors, cancellation, lifetimes and sensitive data. Include checks and
+   outstanding platform acceptance in the PR template.
 
-`.editorconfig` and `.gitattributes` set UTF-8/LF and formatting conventions;
-Go uses `gofmt`, native compilation uses warnings-as-errors in host tests.
-Generated libraries, HAPs, coverage, SDK caches and device logs are not source.
+Fork PRs run SDK-free source checks on GitHub-hosted runners. Full checks need a
+trusted, explicitly enabled `harmonyos` self-hosted runner; external fork code
+is not run on it. A maintainer must review such contributions and run the full
+checks in an appropriately isolated trusted environment before merging.
+Do not use `pull_request_target` to execute untrusted code.
 
-## CI
+## Layout and docs
 
-`.github/workflows/check.yml` runs `make check` on a trusted pre-provisioned
-`self-hosted, Linux, X64, harmonyos` runner and saves evidence artifacts. It is
-only a checked-in workflow here; no GitHub run or runner has been created.
-Provision the pinned images, a read-only module cache (default
-`/opt/harmony-ci/gomod`, override repository variable `HARMONY_CI_MODULE_CACHE`),
-and warmed Hvigor metadata before enabling it. Compiler/Hvigor caches are
-preserved by the workflow. An ordinary hosted runner lacks this SDK/toolchain.
-Do not expose this trusted Docker-enabled runner to untrusted fork code.
+Go tests stay beside `core/` production code. Cross-language boundary tests and
+host-only shims stay in `tests/`. Keep `AppScope/` and `entry/` in the standard
+SDK layout. Current documentation belongs in `docs/`, release notes in
+`docs/releases/`, one-off engineering records in `docs/archive/`.
+Update the relevant index when adding a guide. Generated libraries, HAPs,
+coverage, caches, credentials and device logs are not source.
 
-See [testing boundaries](docs/testing.md) and [architecture](docs/architecture.md).
+Use UTF-8/LF, `gofmt`, existing `.editorconfig` and `.gitattributes`. Native host
+compilation uses warnings-as-errors. Do not add tests that merely mirror source
+text where a meaningful behavior test is possible.
+
+## Releases and licensing
+
+Signing and publication are independent of PR checks. Preserve the last known
+signed artifact, record source commit/version/checksums, and distinguish host
+from target/device evidence. See [release checklist](docs/release-readiness.md).
+
+The project's own code and documentation use the [MIT License](LICENSE).
+Original code/documentation contributions are accepted under that same license.
+Retain existing copyright and license notices; identify any third-party material
+and its applicable terms. Do not submit material you lack permission to contribute.
+No separate CLA is currently required. [Third-party terms](THIRD_PARTY.md),
+including supplied artwork whose redistribution permission is still unconfirmed,
+remain independent of the project's MIT license.

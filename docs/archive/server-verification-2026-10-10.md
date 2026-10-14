@@ -79,5 +79,5 @@ No new device testing was performed or requested. Linux Node is not the Ark
 runtime, and an HTTP fake is not the actual mobile control plane. Routine
 logic/ABI/UI-state regression now has a complete server gate. New system
 VPN/TUN/permissions/loader integration still needs its own platform acceptance.
-See [testing](testing.md), [architecture](architecture.md), and
-[contribution rules](../CONTRIBUTING.md).
+See [testing](../testing.md), [architecture](../architecture.md), and
+[contribution rules](../../CONTRIBUTING.md).

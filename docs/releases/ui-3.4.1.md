@@ -20,8 +20,8 @@
 - 后台同步不增删加载行、无变化的设备行保留身份；“最近同步”只更新对应
   时间文字，与内容变更时间分开记录，旧显示缓存兼容。
 
-详细源码修复记录：[六项审查修复](interaction-review-fixes-2026-10-12.md)；
-首次授权路径：[启动握手修正](vpn-consent-handoff-fix.md)。
+详细源码修复记录：[六项审查修复](../archive/interaction-review-fixes-2026-10-12.md)；
+首次授权路径：[启动握手修正](../archive/vpn-consent-handoff-fix.md)。
 
 ## 验证
 

@@ -1,0 +1,22 @@
+name: Feature request / 功能建议
+description: Explain a user need and proposed scope.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Problem / user need
+      description: "What task is difficult with the current Alpha?"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution and acceptance
+      description: "Expected behavior, supported platforms and how success can be verified."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / scope limitations

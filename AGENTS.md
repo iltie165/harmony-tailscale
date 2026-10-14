@@ -46,6 +46,10 @@
 
 ## Required checks
 
+- `make lint`: SDK-free source hygiene and local documentation link checks.
+  Run for documentation/template-only changes; these do not require HAP packaging.
+- `make doctor`: read-only local prerequisite presence checks; it never installs
+  dependencies and must not be claimed as successful compilation.
 - `make test`: offline race/vet, Go coverage, real Linux C ABI/NAPI execution,
   Mock failure injection, real LocalClient streaming, UI producer/consumer tests.
 - `make check`: all of the above plus actual OpenHarmony ARM64 build and Hvigor

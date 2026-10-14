@@ -1,7 +1,7 @@
 # VPN first-consent startup correction
 
 Delivery update: the user resumed packaging. Complete host/target checks and
-signing/verification passed for [3.4.1](ui-3.4.1.md); phone acceptance is still
+signing/verification passed for [3.4.1](../releases/ui-3.4.1.md); phone acceptance is still
 pending. The paused-build descriptions below record the earlier source-fix stage.
 
 The user reports 3.4.0 fails to enable after tapping Allow, although earlier

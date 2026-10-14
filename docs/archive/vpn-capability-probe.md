@@ -3,7 +3,7 @@
 Phone confirmation received 2026-10-10: `ok:true`, `stage:complete`, acquisition,
 read-write access flags, process protection and all close/destroy checks passed.
 Metadata remained EACCES-restricted, with packet I/O explicitly unverified.
-The fixed artifact has since advanced to the [3.2.0 VPN Alpha](vpn-alpha.md).
+The fixed artifact has since advanced to the [3.2.0 VPN Alpha](../vpn-alpha.md).
 The historical probe package is retained separately; this diagnostic remains
 capability-only and is blocked while a real VPN session is active.
 

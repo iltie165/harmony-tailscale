@@ -1,9 +1,15 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := test
-.PHONY: test test-ui check build verify-hap
+.PHONY: lint doctor test test-ui check build verify-hap
 
-test:
+lint:
 	./scripts/check-source.sh
+	python3 scripts/check-project.py
+
+doctor:
+	./scripts/doctor.sh
+
+test: lint
 	./scripts/test-server.sh
 
 test-ui:

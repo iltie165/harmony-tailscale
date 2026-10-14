@@ -1,150 +1,57 @@
-# HarmonyOS device deployment and runtime validation
+# HarmonyOS 设备安装与验收
 
-## Current status
+当前源码版本为 **3.4.1 Alpha**。已有 debug profile 可能只授权指定设备，
+覆盖安装要求兼容 bundle/签名且 versionCode 不降级；不要承诺所有手机可安装。
 
-Current device-test build is **3.2.0 VPN Alpha**. Use the fixed signed name
-`tailscale-probe-signed.hap`; preserve login by cover-installing. Follow the
-[VPN data-path acceptance](vpn-alpha.md#focused-phone-acceptance), including real
-TCP/UDP apps, ordinary Internet, OFF, background and network transitions.
-3.1.4's basic interface probe was phone-confirmed; **3.2.0 traffic is not yet
-phone-confirmed**. Signing materials are in `~/harmony-signing` and the existing
-authorized password is reused transiently; it is not missing.
+## 签名
 
-The sections below preserve the earlier 3.0.6/3.1.0 acceptance procedure.
-
-Version 3.0.6 official login and online peers were confirmed on the user's
-real HarmonyOS phone. Version 3.1.0 implements the redesigned UI and has passed
-host Mock tests, ArkTS compilation and HAP native-payload verification. Its
-layout and automatic foreground refresh await device validation. The new package
-is `dist/hap/tailscale-ui-3.1.0-unsigned.hap`; the previously signed generic HAP
-remains 3.0.6 until a signing password is supplied again.
-
-## Prerequisites
-
-1. Enable Developer Mode and USB debugging on the HarmonyOS device.
-2. Connect it to the Ubuntu host and authorize the host on the device.
-3. Export the P12 password only for the signing command, then sign:
-
-   ```bash
-   read -rsp 'P12 password: ' HARMONY_KEYSTORE_PASSWORD
-   echo
-   export HARMONY_KEYSTORE_PASSWORD
-   # Only if the private-key password differs:
-   # export HARMONY_KEY_PASSWORD='...'
-   ./scripts/sign-hap.sh dist/hap/tailscale-ui-3.1.0-unsigned.hap dist/hap/tailscale-ui-3.1.0-signed.hap
-   unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
-   ```
-
-   The script validates that the signed profile is for
-   `com.ezoo.tailscaleprobe`, uses the complete certificate chain from
-   `lch-phone.cer`, signs with `debug.p12`, verifies the result with
-   `hap-sign-tool`, and writes `dist/hap/tailscale-ui-3.1.0-signed.hap`.
-
-The repository intentionally contains no certificate, private key, profile,
-password, or auth key. Signing inputs remain outside the repository in
-`/home/zackli/harmony-signing`.
-
-## Confirm device visibility
+准备项目外的 P12、完整证书链和匹配 `com.ezoo.tailscaleprobe` 的签名 profile。
+按自己的文件配置路径，不要将它们复制到仓库。脚本先验证 profile、再签名和
+`verify-app`，最后核对原生 HAP 内容。
 
 ```bash
-docker run --rm --network host --privileged \
-  -v /dev/bus/usb:/dev/bus/usb \
-  harmonyos-dev:24.04 \
-  /opt/harmony/command-line-tools/sdk/default/openharmony/toolchains/hdc list targets
+export HARMONY_SIGNING_DIR="$HOME/harmony-signing"
+export HARMONY_KEYSTORE_FILE="$HARMONY_SIGNING_DIR/debug.p12"
+export HARMONY_APP_CERT_FILE="$HARMONY_SIGNING_DIR/app-cert-chain.cer"
+export HARMONY_PROFILE_FILE="$HARMONY_SIGNING_DIR/app-profile.p7b"
+read -rsp 'P12 password: ' HARMONY_KEYSTORE_PASSWORD
+echo
+export HARMONY_KEYSTORE_PASSWORD
+# 仅在私钥密码不同时设置 HARMONY_KEY_PASSWORD。
+./scripts/sign-hap.sh dist/hap/tailscale-probe-unsigned.hap dist/hap/tailscale-probe-3.4.1-signed.hap
+unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
 ```
 
-Do not proceed while the output is `[Empty]`.
+这些命令是操作说明，不会被 `make check` 执行。签名成功不是设备运行证据。
 
-## Install, launch, and capture logs
+## 安装与日志
 
-### UI 3.1.0 acceptance
-
-On the machine physically connected to the phone:
+开启开发者模式/USB 调试，在设备上授权主机，并用 SDK 的 `hdc list targets`
+确认目标。先在 APP 关闭 VPN，保留原包供回退；覆盖安装，**不要先卸载**。
 
 ```bash
-hdc install -r tailscale-ui-3.1.0-signed.hap
+hdc install -r dist/hap/tailscale-probe-3.4.1-signed.hap
 hdc shell aa start -a EntryAbility -b com.ezoo.tailscaleprobe
 ```
 
-1. Cover-install without uninstalling to retain the existing login state.
-2. A restored Running session shows account, Tailnet, local IP and online devices.
-   A signed-out session shows the welcome/login screen.
-3. Login opens the official browser flow. Return after authentication; the app
-   should update automatically without another login click.
-4. Try list refresh, a known `tag:`/`user:` filter, an unmatched query and `group:`.
-   Backend errors must not be disguised as successful empty lists.
-5. Open a device card; check selectable IP/DNS and optional user/tag fields.
-6. Check narrow-screen scrolling, long names, system back and visible progress.
-7. VPN **must remain disabled**, labelled **尚未接入**, even when authenticated.
-8. **设置 → 诊断与日志** retains versions, status, diagnostics, logs and browser
-   testing. Raw results remain selectable; authentication URLs are redacted.
-9. Cancel logout confirmation once. Explicitly confirm only when ready to test
-   re-authentication; logout failure must retain the account UI.
+现有 `./scripts/device-test.sh <signed.hap>` 也可完成覆盖安装、启动和日志捕获，
+但会使用 USB/privileged Docker，并持续运行直至 Ctrl-C；仅主动设备验收时使用。
+日志在 `dist/device-logs/`，公开前再次脱敏。
 
-Capture welcome/home/settings screenshots for visual acceptance. Server Mock
-tests and successful HAP compilation do not replace this step.
+## 当前版本验收清单
 
-### Legacy 3.0.6 probe controls
+1. 新登录/恢复/管理员审批各自提示正确，登录不触发 VPN 系统授权。
+2. 首次 ON：系统允许后连接；拒绝/取消/晚到授权不偷偷开启，重试可用。
+3. 健康扩展暖态 ON/OFF 不重复启停；账号、节点身份、Tailnet IP 保持不变。
+4. 从另一手机应用访问 Tailnet peer 的 TCP/UDP（例如 Moonlight）；确认普通
+   Internet 不受影响。区分直连和 DERP，不把能力探针当真实流量。
+5. 回到前台、断网/切网、锁屏/解锁、系统撤销权限后，界面与实际 VPN 状态一致；
+   未清理完的接口保留可见错误。
+6. 筛选/详情/滚动/后台同步无周期加载闪烁，最近同步时间与内容变化区分。
+7. 小屏/大字号/长名字/系统安全区及辅助功能检查；保存脱敏截图与日志。
 
-```bash
-cd /home/zackli/work/harmony-develop/harmony-tailscale
-./scripts/device-test.sh dist/hap/tailscale-probe-signed.hap
-```
+记录包 SHA-256、commit、系统/API/型号、日期、用例及结果。
+[3.4.1 记录](releases/ui-3.4.1.md) 和 [VPN 边界](vpn-alpha.md) 是验收依据。
+宿主 Node 测试不是 ArkUI 渲染；目标构建/验签不是手机联网结果。
 
-In the application, press these buttons in order:
-
-The hostname field can be left at its default `harmony-tsnet`. It accepts only
-ASCII letters, digits, and hyphens (1-63 characters); no auth key is entered in
-this phase. The app-private state directory is selected automatically.
-
-1. **Query native versions** — must report ABI 3, Tailscale 1.86.2, the Go
-   version, and `coreProbe: true`.
-2. **Run platform diagnostics** — records storage, TCP, UDP, DNS, an HTTPS
-   request to the official control plane, interfaces, polling network monitor,
-   and default-route results.
-3. **Start tsnet asynchronously** — must leave ArkUI responsive and return
-   either `state: started` or a concrete Go error/panic.
-4. **Test system browser only** — opens the public Tailscale login home page
-   without invoking Go or tsnet. This isolates HarmonyOS link dispatch from
-   control-plane authentication URL generation.
-5. **Login with official Tailscale** — subscribes to the official IPN Bus
-   `BrowseToURL` event, then opens the short-lived authentication URL in the
-   system browser. If `openLink` fails, the app retries with an implicit
-   `ACTION_VIEW_DATA` Want. Complete login and return to the app.
-   On failure, the returned JSON embeds the newest 24 sanitized Go log lines in
-   `debugLogs`; this evidence does not depend on HiLog delivery.
-   Version 3.0.6 disables Tailscale's Linux `netns` socket binding on
-   OpenHarmony, matching official userspace-networking mode. The Go logs must
-   contain `platform adapter: Tailscale netns disabled` before login.
-6. **Refresh control status** — must progress to `backendState: Running`, show
-   at least one Tailscale IP, and identify the current tailnet.
-7. **List online machines** — leave the filter blank for all visible online
-   peers, use `tag:server` for an ACL tag, or `user:name` for a user identity.
-   A `group:name` filter must return the explicit management-OAuth limitation.
-8. **Read Go logs** — displays the complete Go/Tailscale log buffer in the UI;
-   the NAPI bridge forwards only its newest 2.4 KB as one atomic HiLog record so
-   HarmonyOS logging rate limits cannot discard later chunks containing the
-   login failure.
-9. **Logout from Tailscale** — verifies control-plane logout when explicitly
-   intended; this clears the node login state.
-10. **Close tsnet** — clean shutdown after the evidence has been captured.
-
-Press `Ctrl-C` in the terminal after the results appear. The script saves the
-filtered device output to:
-
-```text
-dist/device-logs/tailscale-probe-hilog.log
-```
-
-## Acceptance evidence
-
-Acceptance A requires a real log line from tag `TailscaleNAPI` showing the
-version JSON. Acceptance B requires the JSON returned by `tsnet.Start()` plus
-the associated Go log lines. A HAP build, ELF inspection, emulator output, or
-invented sample log is not a substitute.
-
-Expected diagnostic behavior is not hard-coded as success. On the tested API
-24 device, raw default-route Netlink access returned `bind: permission denied`,
-and route-change subscription fell back to polling. Both limitations are
-reported verbatim while storage, socket, DNS, interface, and engine results are
-evaluated independently.
+早期 probe 操作与限制可查 [构建历史](archive/build-report.md)。

@@ -1,0 +1,39 @@
+name: Bug report / 问题报告
+description: Report a reproducible app, build or test problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Alpha project. Redact login links, tokens, private state, signing materials and personal metadata. Security issues: read SECURITY.md first."
+  - type: input
+    id: version
+    attributes:
+      label: App version / source commit
+      placeholder: "3.4.1 or commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "Device model, HarmonyOS/API version, or host OS and make doctor output for build issues."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: "Include starting account/VPN state and exact actions or commands."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: "Minimal error/log excerpt or screenshot; do not upload raw app-private state."

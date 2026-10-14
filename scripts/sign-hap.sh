@@ -3,7 +3,7 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_DEV_IMAGE:-harmonyos-dev:24.04}
-signing_dir=${HARMONY_SIGNING_DIR:-/home/zackli/harmony-signing}
+signing_dir=${HARMONY_SIGNING_DIR:-$HOME/harmony-signing}
 keystore=${HARMONY_KEYSTORE_FILE:-$signing_dir/debug.p12}
 app_cert=${HARMONY_APP_CERT_FILE:-$signing_dir/lch-phone.cer}
 profile=${HARMONY_PROFILE_FILE:-$signing_dir/tailscala-hos-debug.p7b}

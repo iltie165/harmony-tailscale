@@ -5,3 +5,27 @@
 /entry/build/
 /entry/libs/
 /entry/src/main/cpp/include/
+
+# Tool metadata and personal editor settings.
+**/oh_modules/
+**/node_modules/
+/.idea/
+/.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Private local inputs, never source or release artifacts.
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.p7b
+*.hap
+*.so
+/signing/
+/device-logs/
