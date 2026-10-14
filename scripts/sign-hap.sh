@@ -13,6 +13,10 @@ unsigned_hap=${1:-$project_root/dist/hap/$unsigned_name}
 signed_hap=${2:-$project_root/dist/hap/$signed_name}
 bundle_name=com.ezoo.tailscaleprobe
 compatible_api=${HARMONY_COMPATIBLE_API:-24}
+if [[ -e "$signed_hap" || -L "$signed_hap" ]]; then
+  echo 'refusing to overwrite an existing signed artifact; use a new version or output path' >&2
+  exit 1
+fi
 
 : "${HARMONY_KEYSTORE_PASSWORD:?set HARMONY_KEYSTORE_PASSWORD without writing it to a file}"
 key_password=${HARMONY_KEY_PASSWORD:-$HARMONY_KEYSTORE_PASSWORD}
@@ -26,7 +30,8 @@ for required in "$keystore" "$app_cert" "$profile" "$unsigned_hap"; do
 done
 python3 "$project_root/scripts/version.py" check --hap "$unsigned_hap"
 
-tmp_dir=$(mktemp -d)
+mkdir -p "$(dirname "$signed_hap")"
+tmp_dir=$(mktemp -d "$(dirname "$signed_hap")/.sign-hap.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT
 
 openssl cms -verify -binary -inform DER -in "$profile" -noverify \
@@ -42,20 +47,16 @@ if (( cert_count < 2 )); then
   exit 1
 fi
 
-mkdir -p "$(dirname "$signed_hap")"
-
-docker run --rm \
+docker run --rm --pull never --network none \
   -e HARMONY_KEYSTORE_PASSWORD \
   -e HARMONY_KEY_PASSWORD="$key_password" \
   -e HARMONY_KEY_ALIAS="$key_alias" \
   -e HARMONY_COMPATIBLE_API="$compatible_api" \
-  -e HARMONY_OUTPUT_NAME="$(basename "$signed_hap")" \
   -v "$keystore:/signing/debug.p12:ro" \
   -v "$app_cert:/signing/app-cert-chain.cer:ro" \
   -v "$profile:/signing/profile.p7b:ro" \
   -v "$unsigned_hap:/input/app-unsigned.hap:ro" \
   -v "$tmp_dir:/work" \
-  -v "$(dirname "$signed_hap"):/output" \
   "$image" bash -lc '
     set -euo pipefail
     sign_tool=/opt/harmony/command-line-tools/sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar
@@ -82,15 +83,18 @@ docker run --rm \
       -signAlg SHA256withECDSA \
       -keystoreFile /signing/debug.p12 \
       -keystorePwd "$HARMONY_KEYSTORE_PASSWORD" \
-      -outFile "/output/$HARMONY_OUTPUT_NAME" \
+      -outFile /work/signed.hap \
       -compatibleVersion "$HARMONY_COMPATIBLE_API" \
       -signCode 1
 
     java -jar "$sign_tool" verify-app \
-      -inFile "/output/$HARMONY_OUTPUT_NAME" \
+      -inFile /work/signed.hap \
       -outCertChain /work/verified-cert-chain.cer \
       -outProfile /work/verified-profile.p7b
   '
 
-"$project_root/scripts/verify-hap.sh" "$signed_hap"
+"$project_root/scripts/verify-hap.sh" "$tmp_dir/signed.hap"
+# Same-filesystem hard link publishes complete verified bytes atomically. -T
+# rejects even a concurrently created directory; existing destinations survive.
+ln -T -- "$tmp_dir/signed.hap" "$signed_hap"
 echo "Signed HAP: $signed_hap"

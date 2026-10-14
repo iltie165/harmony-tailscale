@@ -1,5 +1,5 @@
 import { common, Want, bundleManager } from '@kit.AbilityKit';
-import { emitter } from '@kit.BasicServicesKit';
+import { emitter, pasteboard } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import tailscale from 'libtailscale_napi.so';
 import { requestVpnProbe } from '../vpn/VpnProbeClient';
@@ -11,6 +11,8 @@ import { ControlResult, PeerInfo, readControl, readPeers, isAuthenticated,
 import { SessionPreview, SessionPreviewStore, previewOf } from './SessionPreview';
 import { readPlatformInfo } from './PlatformInfo';
 import { getAccountSession } from './AccountSessionPlatform';
+import { projectLink, supportSummary, SupportSummaryInput } from './ProductInfo';
+import { util } from '@kit.ArkTS';
 
 import { fileIo } from '@kit.CoreFileKit';
 import { NetworkServiceClient, NetworkServiceError, serviceDeadline } from '../vpn/NetworkServiceClient';
@@ -71,6 +73,10 @@ export class ClientView {
   @Track vpnRunning: boolean = false;
   @Track vpnCanRetry: boolean = false;
   @Track healthMessage: string = '';
+  @Track utilityMessage: string = '';
+  @Track legalText: string = '';
+  @Track legalLoading: boolean = false;
+  @Track feedbackText: string = '';
   // Keep the @State object and rows alive. Only changed observed properties
   // are assigned; equal snapshots do not dirty any ArkUI dependency.
   apply(next: ClientView): void {
@@ -94,6 +100,10 @@ export class ClientView {
     if(this.vpnRunning!==next.vpnRunning){this.vpnRunning=next.vpnRunning;}
     if(this.vpnCanRetry!==next.vpnCanRetry){this.vpnCanRetry=next.vpnCanRetry;}
     if(this.healthMessage!==next.healthMessage){this.healthMessage=next.healthMessage;}
+    if(this.utilityMessage!==next.utilityMessage){this.utilityMessage=next.utilityMessage;}
+    if(this.legalText!==next.legalText){this.legalText=next.legalText;}
+    if(this.legalLoading!==next.legalLoading){this.legalLoading=next.legalLoading;}
+    if(this.feedbackText!==next.feedbackText){this.feedbackText=next.feedbackText;}
     if(this.page!==next.page){this.page=next.page;}
     if(this.status!==next.status){this.status=next.status;}
     if(this.peers!==next.peers){this.peers=next.peers;}
@@ -135,6 +145,12 @@ export class ClientView {
 
 export class ClientController {
   public page: string = 'main';
+  public utilityMessage: string = '';
+  public legalText: string = '';
+  public legalLoading: boolean = false;
+  public feedbackText: string = '';
+  private utilityRevision: number = 0;
+  private pageTrail: string[] = [];
   public status: ControlResult = {};
   public peers: PeerInfo[] = [];
   public selectedPeer: PeerInfo | undefined = undefined;
@@ -226,6 +242,8 @@ export class ClientController {
 
   aboutToDisappear(): void {
     this.mounted = false;
+    this.utilityRevision++;
+    this.legalLoading = false;
     this.stopStartupTimer();
     this.stopPolling();
     if (this.vpnTimer !== -1) { clearTimeout(this.vpnTimer); this.vpnTimer = -1; }
@@ -235,10 +253,80 @@ export class ClientController {
 
   onBackPress(): boolean {
     if (this.page !== 'main') {
-      this.page = this.page === 'diagnostics' ? 'settings' : 'main';
+      if (['about', 'help', 'licenses', 'report'].includes(this.page)) {
+        this.page = this.pageTrail.pop() || 'settings';
+        this.utilityRevision++; this.legalLoading = false;
+      } else { this.page = this.page === 'diagnostics' ? 'settings' : 'main'; }
+      this.utilityMessage = '';
       return true;
     }
     return false;
+  }
+
+  openInfoPage(page: string): void {
+    if (!this.mounted || !['about', 'help', 'licenses', 'report'].includes(page) || page === this.page) { return; }
+    if (!['about', 'help', 'licenses', 'report'].includes(this.page)) { this.pageTrail = []; }
+    this.pageTrail.push(this.page); this.page = page; this.utilityMessage = '';
+    if (page === 'report') { this.feedbackText = this.feedbackSummary(); }
+    this.notify();
+    if (page === 'licenses') { this.loadLicenses(); }
+  }
+  async loadLicenses(): Promise<void> {
+    if (!this.mounted || this.page !== 'licenses' || this.legalLoading) { return; }
+    const revision = ++this.utilityRevision;
+    this.legalLoading = true; this.legalText = ''; this.utilityMessage = ''; this.notify();
+    try {
+      if (!this.appContext) { throw new Error('缺少应用上下文'); }
+      const bytes = await this.appContext.resourceManager.getRawFileContent('open-source-notices.txt');
+      if (!this.mounted || revision !== this.utilityRevision || this.page !== 'licenses') { return; }
+      this.legalText = new util.TextDecoder('utf-8').decodeToString(bytes);
+    } catch (_error) {
+      if (this.mounted && revision === this.utilityRevision) { this.utilityMessage = '无法读取本地许可证，请重试。'; }
+    } finally {
+      if (revision === this.utilityRevision) { this.legalLoading = false; this.notify(); }
+    }
+  }
+  feedbackSummary(): string {
+    const platform = readPlatformInfo();
+    const input: SupportSummaryInput = {
+      version: this.appVersion, os: platform.os, osVersion: platform.osVersion,
+      authenticated: isAuthenticated(this.status), backendState: this.status.backendState || '',
+      vpnState: this.vpn.state, connected: this.vpn.connected, coreAlive: this.vpn.coreAlive,
+      peersStale: this.peersStale, peerCount: this.peers.length
+    };
+    return supportSummary(input);
+  }
+  refreshFeedbackSummary(): void { this.feedbackText = this.feedbackSummary(); this.utilityMessage = ''; this.notify(); }
+  async copyFeedbackSummary(): Promise<void> {
+    await this.copyPlain(this.feedbackText || this.feedbackSummary(), '已复制反馈摘要，请核对后再提交。');
+  }
+  async copyPeerIPv4(): Promise<void> {
+    const ip = this.selectedPeer?.tailscaleIPs?.find(tailnetIPv4);
+    if (!ip) { this.utilityMessage = '该设备没有可用的 Tailnet IPv4。'; this.notify(); return; }
+    await this.copyPlain(ip, this.peersStale ? '已复制最近记录的 IPv4，当前状态待确认。' : '已复制设备 IPv4。');
+  }
+  async copyLocalIPv4(): Promise<void> {
+    const ip = this.vpn.networkMapReady && tailnetIPv4(this.vpn.assignedIPv4) ? this.vpn.assignedIPv4 :
+      this.displayAccount().tailscaleIPs?.find(tailnetIPv4);
+    if (!ip) { this.utilityMessage = '本机尚无可用的 Tailnet IPv4。'; this.notify(); return; }
+    const live = this.vpn.networkMapReady || isAuthenticated(this.status);
+    await this.copyPlain(ip, live ? '已复制本机 IPv4。' : '已复制最近记录的 IPv4，当前状态待确认。');
+  }
+  private async copyPlain(text: string, success: string): Promise<void> {
+    if (!this.mounted) { return; }
+    const revision = ++this.utilityRevision;
+    try {
+      await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text));
+      if (this.mounted && revision === this.utilityRevision) { this.utilityMessage = success; }
+    } catch (_error) {
+      if (this.mounted && revision === this.utilityRevision) { this.utilityMessage = '复制失败，请重试或长按选择文字。'; }
+    }
+    this.notify();
+  }
+  async openProjectLink(kind: string): Promise<void> {
+    if (!this.mounted) { return; }
+    try { await this.openSystemBrowser(projectLink(kind)); }
+    catch (_error) { if (this.mounted) { this.utilityMessage = '无法打开网页，请检查浏览器后重试。'; this.notify(); } }
   }
 
   private stopPolling(): void {
@@ -573,9 +661,11 @@ export class ClientController {
   }
 
   async openSystemBrowser(url: string): Promise<void> {
+    if (!this.mounted) { throw new Error('页面已关闭'); }
     if (!this.appContext) { throw new Error('UIAbilityContext is unavailable'); }
     try { await this.appContext.openLink(url, { appLinkingOnly: false }); }
     catch (openLinkError) {
+      if (!this.mounted) { throw new Error('页面已关闭'); }
       const browserWant: Want = {
         action: 'ohos.want.action.viewData', uri: url, entities: ['entity.system.browsable']
       };
@@ -835,6 +925,8 @@ export class ClientController {
     view.vpnRunning = this.vpnRunning();
     view.vpnCanRetry = this.vpnCanRetry();
     view.healthMessage = this.displayHealth().join('\n');
+    view.utilityMessage = this.utilityMessage; view.legalText = this.legalText; view.legalLoading = this.legalLoading;
+    view.feedbackText = this.feedbackText;
     view.page = this.page;
     view.status = this.status;
     view.peers = this.peers;
@@ -878,6 +970,7 @@ export class ClientController {
       previous.vpnRunning === view.vpnRunning &&
       previous.vpnCanRetry === view.vpnCanRetry &&
       previous.healthMessage === view.healthMessage &&
+      previous.utilityMessage === view.utilityMessage && previous.legalText === view.legalText && previous.legalLoading === view.legalLoading && previous.feedbackText === view.feedbackText &&
       previous.page === view.page &&
       previous.status === view.status &&
       previous.peers === view.peers &&

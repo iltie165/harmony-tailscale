@@ -15,6 +15,7 @@
   WireGuard 引擎；不添加默认路由，也不覆盖系统 DNS。
 - 登录不请求 VPN 授权；正常 ON/OFF 保留账号和健康核心，开关反映实际接口状态。
 - IPv4 TCP/UDP 与有限的本地 ICMP 应答；日志与诊断对认证 URL 做脱敏。
+- 一键复制本机/设备 IPv4，离线使用帮助、关于/许可，以及先预览再复制的反馈摘要。
 - **未支持**：MagicDNS、IPv6、出口节点、子网路由、开机自启/保证常驻、SSH
   服务端、Taildrive、策略组管理。后台/锁屏行为不承诺稳定。
 
@@ -35,6 +36,7 @@ make doctor     # 只读检查本机工具链/镜像/缓存
 make version    # 显示统一项目版本与平台升级序号
 make test       # 离线 Go race/vet、C ABI/NAPI 与 UI 回归
 make check      # 上述检查 + ARM64/ArkTS 编译及 HAP 内容核对
+make release-check # 完整回归 + 真正 release-mode 编译，仍不签名/发布
 ```
 
 构建产物在 `dist/`；`make build` 输出未签名 HAP。签名与设备安装是独立步骤，
@@ -72,6 +74,7 @@ Go `core/` 是 `c-shared` 的 main 包，不为目录美观拆成重复状态所
 
 - [文档导航](docs/README.md) · [架构与契约](docs/architecture.md)
 - [贡献指南](CONTRIBUTING.md) · [测试边界](docs/testing.md)
+- [首发功能范围与验收](docs/first-release.md)
 - [更新记录](CHANGELOG.md) · [版本与发布规范](docs/versioning.md) · [后续计划](docs/roadmap.md)
 - [问题与支持](SUPPORT.md) · [安全报告](SECURITY.md)
 - [第三方说明](THIRD_PARTY.md) · [开源准备审查](docs/project-readiness.md)

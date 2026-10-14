@@ -6,7 +6,7 @@ upstream software; they do not imply endorsement or grant trademark rights.
 | Component | Pin/source | License / status |
 | --- | --- | --- |
 | Tailscale core | `tailscale.com v1.86.2`, commit `d72494bac7a2fb6b6a01715cfc5bcc903dbd7594` | Main upstream license BSD-3-Clause plus additional patent grant; preserved in [third_party/tailscale](third_party/tailscale/README.md) |
-| Go transitive modules | [go.mod](go.mod) / [go.sum](go.sum) | Each retains its own license; full dependency notice audit not yet complete |
+| Linked Go modules | [57-module inventory](third_party/linked-modules.json), derived from actual binary metadata | Supplied texts collected in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt); per-file applicability/manual audit still separate |
 | OpenHarmony Go toolchain/runtime | Existing build image, Go 1.24.5 | Source provenance/commit and runtime notice set still to be recorded |
 | HarmonyOS SDK, Hvigor, bundled native runtime | Official API 26 toolchain | SDK terms and redistributed `libc++_shared.so` notice obligations require review; SDK not vendored |
 | Icons/artwork | `AppScope/resources/` and `entry/src/main/resources/` | Supplied PNG and vector provenance/redistribution permission still to be confirmed |
@@ -27,3 +27,11 @@ completed review of everything linked or packaged.
    an inventory and gap record, **not** a completed SBOM or compliance claim.
 
 Upstream source: https://github.com/tailscale/tailscale/tree/v1.86.2.
+
+## Packaged local notice bundle
+
+`make build` regenerates notices from the actual linked Go binary metadata and existing
+verified cache, offline. The bundle includes supplied Go and SDK LLVM texts and is
+packaged for offline app viewing. Collection is not a completed legal audit, SPDX
+classification or confirmation of artwork redistribution rights. Toolchain source
+provenance/reproduction and SDK redistribution applicability remain to be reviewed.

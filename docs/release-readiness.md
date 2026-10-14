@@ -19,6 +19,14 @@
 - e580aaf 的 [远程基础 CI](https://github.com/iltie165/harmony-tailscale/actions/runs/38501955041)
   已成功；全量 HarmonyOS CI 被跳过，可信 runner 的部署/执行仍未验证。
 
+## 首发候选功能补齐
+
+离线帮助/关于/开源声明、IPv4 复制和反馈摘要已实现；版本更新失败回滚与
+签名交付保护已补齐；真实 release-mode 与包内许可资源核对已验证。
+最终完整 release-check 369 项回归通过，当前未签名 HAP 的 app.debug=false。
+新增功能与两处工具保护的证据见 [候选验证](archive/first-alpha-candidate-2026-10-14.md)。
+当前实际功能范围及仍待确认的首发条件见 [首发说明](first-release.md)。
+
 ## 公开发布前的门槛
 
 | 优先级 | 工作 | 完成条件 |

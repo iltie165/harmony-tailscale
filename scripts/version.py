@@ -3,8 +3,11 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
+import stat
+import tempfile
 import zipfile
 
 
@@ -64,10 +67,41 @@ def set_version(version: str, code: int, root: Path = ROOT) -> None:
     metadata['AppScope/app.json5']['app'].update(versionName=version, versionCode=code)
     for name in METADATA[1:]:
         metadata[name]['version'] = version
-    # Validate everything before writing. Any interrupted edit is caught by check.
-    for name, data in metadata.items():
-        (root / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
-    (root / 'VERSION').write_text(version + '\n')
+    replacements = {name: (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode()
+                    for name, data in metadata.items()}
+    replacements['VERSION'] = (version + '\n').encode()
+    # Prepare original/new bytes before mutation. Individual replacements are
+    # atomic; catchable failures restore already-replaced files without new writes.
+    # A killed process can still interrupt a multi-file transaction: check fails
+    # closed on drift rather than pretending the whole filesystem is atomic.
+    with tempfile.TemporaryDirectory(prefix='.version-stage-', dir=root) as staging:
+        stage = Path(staging)
+        originals = {}
+        updates = {}
+        for index, (name, content) in enumerate(replacements.items()):
+            path = root / name
+            originals[name] = stage / f'{index}.old'
+            updates[name] = stage / f'{index}.new'
+            originals[name].write_bytes(path.read_bytes())
+            updates[name].write_bytes(content)
+            mode = stat.S_IMODE(path.stat().st_mode)
+            os.chmod(originals[name], mode)
+            os.chmod(updates[name], mode)
+        changed = []
+        try:
+            for name in replacements:
+                os.replace(updates[name], root / name)
+                changed.append(name)
+        except OSError:
+            rollback_errors = []
+            for name in reversed(changed):
+                try:
+                    os.replace(originals[name], root / name)
+                except OSError:
+                    rollback_errors.append(name)
+            if rollback_errors:
+                raise ValueError('Version update and rollback failed; restore metadata from Git before building') from None
+            raise
 
 
 def artifact(kind: str, root: Path = ROOT) -> str:

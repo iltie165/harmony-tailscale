@@ -19,6 +19,7 @@ function compile(source, name, dependencies = {}) {
   return mod.exports;
 }
 const model = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ClientModel.ets'), 'utf8'), 'model.cjs');
+const productInfo = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ProductInfo.ets'), 'utf8'), 'product-info.cjs');
 const vpnModel = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnProbeModel.ets'), 'utf8'), 'vpn-model.cjs');
 const vpnClient = compile(fs.readFileSync(path.join(root, 'entry/src/main/ets/vpn/VpnProbeClient.ets'), 'utf8'), 'vpn-client.cjs', {
   './VpnProbeModel': vpnModel
@@ -36,6 +37,9 @@ const running = {
 const onlinePeer = { id: 'one', online: true, hostName: 'test-host', os: 'linux', tailscaleIPs: ['100.64.1.2'] };
 function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, sessionOverrides = {}, files = new Map()) {
   const calls = [];
+  const clipboard = [];
+  const pasteboard = { MIMETYPE_TEXT_PLAIN: 'text/plain', createData: (_type, text) => text,
+    getSystemPasteboard: () => ({ setData: async text => { clipboard.push(text); } }) };
   let sessionLive = false;
   let accountAlive = false;
   let sessionReport;
@@ -194,11 +198,13 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
   });
   const source=fs.readFileSync(path.join(root, 'entry/src/main/ets/pages/ClientController.ets'), 'utf8');
   const { ClientController: Index, ClientView, PeerRow } = compile(source, 'controller.cjs', {
-    '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter },
+    '@kit.AbilityKit': {}, '@kit.BasicServicesKit': { emitter, pasteboard },
+    '@kit.ArkTS': { util: { TextDecoder: class { decodeToString(bytes) { return Buffer.from(bytes).toString('utf8'); } } } },
     '@kit.CoreFileKit': { fileIo: { accessSync: () => true } },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
     'libtailscale_napi.so': { default: native }, './ClientModel': model,
     './SessionPreview': preview,
+    './ProductInfo': productInfo,
     './AccountSessionPlatform':accountModule,
     './PlatformInfo': { readPlatformInfo: () => ({os:'openharmony',osVersion:'test',deviceModel:'test-phone'}) },
     '../vpn/VpnProbeClient': vpnClient, '../vpn/VpnProbePlatform': platform,
@@ -216,11 +222,12 @@ function harness(overrides = {}, vpnOverrides = {}, probeReportOverrides = {}, s
   ui.mounted = true;
   ui.dataDir = '/private/tailscale';
   ui.appContext = {
+    resourceManager: { getRawFileContent: async () => Buffer.from('MIT License\nCopyright test\n') },
     filesDir: '/private',
     openLink: async (url) => { calls.push(['browser', url]); },
     startAbility: async () => { calls.push('fallback'); }
   };
-  return { ui, calls, probeCalls, files, preview, native, accountModule, ClientView, PeerRow };
+  return { ui, calls, probeCalls, files, preview, native, accountModule, ClientView, PeerRow, clipboard, pasteboard };
 }
 
 test('a current native map releases startup and enables VPN while account refresh is pending',async t=>{
@@ -1296,4 +1303,61 @@ test('equal successful sync changes only synchronization time without loading or
   assert.equal(view.peerRows,rows);assert.equal(view.peerRows[0],first);assert.deepEqual(assignments,['lastSynced']);
   const saved=ui.previewStore.read();assert.equal(saved.syncedAt,view.lastSynced);assert.equal(saved.updatedAt,changedAt);
   const legacy={...saved};delete legacy.syncedAt;assert.equal(preview.readPreview(JSON.stringify(legacy)).syncedAt,changedAt);
+});
+
+test('product info routes work signed out and nested license back returns to about then settings', async () => {
+  const {ui,calls}=harness();ui.page='settings';ui.openInfoPage('about');
+  assert.equal(ui.page,'about');ui.openInfoPage('licenses');await new Promise(resolve=>setImmediate(resolve));
+  assert.match(ui.legalText,/MIT License/);assert.equal(ui.legalLoading,false);
+  assert.equal(ui.onBackPress(),true);assert.equal(ui.page,'about');ui.onBackPress();assert.equal(ui.page,'settings');
+  ui.page='main';ui.openInfoPage('help');ui.onBackPress();assert.equal(ui.page,'main');
+  assert.equal(calls.length,0);ui.openInfoPage('unexpected');assert.equal(ui.page,'main');
+});
+
+test('license resource failures are retryable and a late resource cannot update a departed view', async () => {
+  const {ui}=harness();ui.appContext.resourceManager.getRawFileContent=async()=>{throw new Error('missing');};
+  ui.openInfoPage('licenses');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.legalLoading,false);assert.match(ui.utilityMessage,/重试/);
+  let finish;ui.appContext.resourceManager.getRawFileContent=()=>new Promise(resolve=>{finish=resolve;});
+  const loading=ui.loadLicenses();ui.onBackPress();finish(Buffer.from('late license'));await loading;
+  assert.equal(ui.legalText,'');assert.equal(ui.legalLoading,false);
+});
+
+test('IPv4 copy uses only validated Tailnet IPv4 and leaves VPN/account lifecycle untouched', async () => {
+  const {ui,calls,clipboard}=harness();ui.selectedPeer={...onlinePeer,tailscaleIPs:['fd7a:115c::1','http://evil','100.64.1.2']};
+  await ui.copyPeerIPv4();assert.deepEqual(clipboard,['100.64.1.2']);assert.match(ui.utilityMessage,/最近记录/);
+  ui.selectedPeer={...onlinePeer,tailscaleIPs:['192.168.1.2']};await ui.copyPeerIPv4();assert.equal(clipboard.length,1);
+  ui.status=running;await ui.copyLocalIPv4();assert.equal(clipboard[1],'100.64.1.1');assert.deepEqual(calls,[]);
+});
+
+test('feedback summary excludes identities, IPs, login URLs, raw errors and logs before explicit copy', async () => {
+  const {ui,clipboard,calls}=harness();ui.status={...running,authUrl:'https://login.tailscale.com/a/secret',error:'private-token'};
+  ui.output='raw-secret-log';ui.appVersion='0.1.0-alpha.1';ui.previewAccount=running;ui.peers=[onlinePeer];
+  const summary=ui.feedbackSummary();assert.match(summary,/0\.1\.0-alpha\.1/);
+  for(const secret of ['test@example.com','100.64.1.1','100.64.1.2','test.net','private-token','raw-secret-log','/a/secret','test-host'])assert.ok(!summary.includes(secret),secret);
+  assert.equal(clipboard.length,0);await ui.copyFeedbackSummary();assert.equal(clipboard[0],summary);assert.deepEqual(calls,[]);
+});
+
+test('clipboard errors and a completion after unmount do not misreport success', async () => {
+  const {ui,pasteboard}=harness();ui.selectedPeer=onlinePeer;
+  pasteboard.getSystemPasteboard=()=>({setData:async()=>{throw new Error('denied');}});
+  await ui.copyPeerIPv4();assert.match(ui.utilityMessage,/复制失败/);
+  let finish;pasteboard.getSystemPasteboard=()=>({setData:()=>new Promise(resolve=>{finish=resolve;})});
+  const copying=ui.copyPeerIPv4();ui.aboutToDisappear();finish();await copying;assert.match(ui.utilityMessage,/复制失败/);
+});
+
+test('project links are allowlisted and browser fallback does not launch after unmount', async () => {
+  const {ui,calls}=harness();await ui.openProjectLink('source');assert.deepEqual(calls,[['browser','https://github.com/iltie165/harmony-tailscale']]);
+  await ui.openProjectLink('https://evil');assert.equal(calls.length,1);assert.match(ui.utilityMessage,/无法打开/);
+  let reject;ui.appContext.openLink=()=>new Promise((_resolve,fail)=>{reject=fail;});
+  const opening=ui.openProjectLink('issues');ui.aboutToDisappear();reject(new Error('late'));await opening;
+  assert.equal(calls.includes('fallback'),false);
+});
+
+test('copied feedback is exactly the reviewed snapshot until explicit refresh', async () => {
+  const {ui,clipboard}=harness();ui.appVersion='0.1.0-alpha.1';ui.page='diagnostics';
+  ui.status=running;ui.openInfoPage('report');const preview=ui.feedbackText;
+  ui.status=loggedOut;await ui.copyFeedbackSummary();assert.equal(clipboard[0],preview);
+  ui.refreshFeedbackSummary();assert.notEqual(ui.feedbackText,preview);await ui.copyFeedbackSummary();
+  assert.equal(clipboard[1],ui.feedbackText);ui.onBackPress();assert.equal(ui.page,'diagnostics');
 });

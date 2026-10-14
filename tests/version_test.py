@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location('project_version', Path(__file__).resolve().parents[1] / 'scripts/version.py')
@@ -84,6 +85,25 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(versioning.artifact('signed', self.root), 'harmony-tailscale-0.1.0-alpha.1-arm64-signed.hap')
         versioning.set_version('0.1.0-rc.1', 3004003, self.root)
         self.assertEqual(versioning.artifact('unsigned', self.root), 'harmony-tailscale-0.1.0-rc.1-arm64-unsigned.hap')
+
+    def test_mid_transaction_failure_restores_exact_originals_and_modes(self):
+        before = {p: (p.read_bytes(), p.stat().st_mode) for p in self.root.rglob('*') if p.is_file()}
+        replace = versioning.os.replace
+        def failing_replace(source, destination):
+            if Path(destination) == self.root / 'oh-package.json5' and str(source).endswith('.new'):
+                raise OSError('injected replacement failure')
+            return replace(source, destination)
+        with patch.object(versioning.os, 'replace', failing_replace), self.assertRaises(OSError):
+            versioning.set_version('0.1.0-alpha.2', 3004003, self.root)
+        self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mode) for p in before})
+        self.assertEqual(versioning.check(self.root), ('0.1.0-alpha.1', 3004002))
+        self.assertFalse(list(self.root.glob('.version-stage-*')))
+
+    def test_preparation_failure_never_mutates_originals(self):
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with patch.object(Path, 'write_bytes', side_effect=OSError('disk full')), self.assertRaises(OSError):
+            versioning.set_version('0.1.0-alpha.2', 3004003, self.root)
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
 
 
 if __name__ == '__main__':

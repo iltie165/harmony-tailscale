@@ -2,3 +2,7 @@
 *.hap binary
 *.so binary
 *.png binary
+# Preserve upstream notices verbatim, including their line endings/whitespace.
+THIRD_PARTY_NOTICES.txt -text -whitespace
+entry/src/main/resources/rawfile/open-source-notices.txt -text -whitespace
+third_party/**/NOTICE -text -whitespace

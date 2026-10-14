@@ -2,12 +2,14 @@ import { DeviceCard } from './DeviceCard';
 import { common } from '@kit.AbilityKit';
 import { ClientView, ClientController, PeerRow, getClientController } from './ClientController';
 import { PeerInfo, accountName, tailnetName, peerName, peerAddress, osLabel } from './ClientModel';
+import { HELP_SECTIONS, HelpSection, PRIVACY_TEXT } from './ProductInfo';
 const BLUE: string = '#086CFA';
 const INK: string = '#142337';
 const MUTED: string = '#6D8094';
 @Entry
 @Component
 struct Index {
+  @State private licensePage: number = 0;
   @StorageLink('tailscale.safeTop') private safeTop: number = 0;
   @StorageLink('tailscale.safeBottom') private safeBottom: number = 0;
   @StorageLink('tailscale.safeLeft') private safeLeft: number = 0;
@@ -54,7 +56,7 @@ struct Index {
       Button({ type: ButtonType.Normal }) { this.icon($r('app.media.chevron_left')) }
         .backgroundColor(Color.Transparent).width(44).height(44).borderRadius(16)
         .accessibilityText('返回').onClick(() => {
-          this.model.page = this.view.page === 'diagnostics' ? 'settings' : 'main'; this.model.notify();
+          this.model.onBackPress(); this.model.notify();
         })
       Text(title).fontSize(22).fontWeight(FontWeight.Bold).fontColor(INK).layoutWeight(1)
     }.width('100%').margin({ bottom: 16 })
@@ -128,6 +130,8 @@ struct Index {
       }
       Text('登录只认证账号；VPN 可通过首页开关开启。').fontSize(11).fontColor('#8C9DAC')
         .margin({ top: 24, bottom: 12 })
+      Button('使用帮助').backgroundColor(Color.Transparent).fontColor(BLUE)
+        .onClick(() => { this.model.openInfoPage('help'); })
     }.width('100%')
   }
 
@@ -186,6 +190,8 @@ struct Index {
       `${this.view.status.backendState === 'Running' && this.view.status.tailscaleIPs?.length ? '本机 IP' : '最近记录的 IP'}：${this.view.account.tailscaleIPs?.join(' · ') || '暂无'}`)
       .width('100%').fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
       .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+    Button('复制本机 IPv4').fontSize(12).fontColor(BLUE).backgroundColor(Color.Transparent)
+      .onClick(() => { this.model.copyLocalIPv4(); }).margin({ bottom: 12 })
     this.notice()
     if (this.view.restoringSession) {
       Text('正在恢复账号信息…').fontSize(13).fontColor(MUTED).width('100%').margin({ bottom: 12 })
@@ -284,6 +290,8 @@ struct Index {
       }.padding(18).width('100%')
     }.width('100%').height(80).backgroundColor(Color.White).borderRadius(22)
       .onClick(() => { this.model.page = 'diagnostics'; this.model.notify(); }).margin({ bottom: 24 })
+    this.infoEntry('使用与排障', '连接设备、访问范围和常见问题', 'help')
+    this.infoEntry('关于与开源许可', '社区版本、源码、隐私和许可证', 'about')
     Text('Tailscale for HarmonyOS').fontSize(14).fontColor(INK)
     Text(`${this.view.appVersion} · Tailscale Core 1.86.2`).fontSize(12).fontColor(MUTED).margin({ top: 6 })
     Text('VPN Alpha：支持登录、在线设备和 Tailnet IPv4 互通。暂不支持 MagicDNS、IPv6、出口节点和子网路由。')
@@ -310,6 +318,8 @@ struct Index {
     this.diagnosticButton('查询核心状态', 'status')
     this.diagnosticButton('启动网络服务', 'start')
     this.diagnosticButton('停止网络服务（不会注销账号）', 'close')
+    Button('查看反馈摘要').fontSize(13).fontColor(BLUE).backgroundColor('#E3EFFF')
+      .width('100%').height(44).onClick(() => { this.model.openInfoPage('report'); })
     Text(this.view.output || '选择一项检查，结果会显示在这里。')
       .fontFamily('monospace').fontSize(12).fontColor(INK).width('100%').padding(16)
       .backgroundColor(Color.White).borderRadius(16).textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
@@ -334,6 +344,10 @@ struct Index {
           .fontColor(INK).margin({ top: 16, bottom: 8 })
         Text(this.view.peersStale || !this.view.peers.some((peer: PeerInfo) => peer.id === this.view.selectedPeer?.id) ? '最近记录 · 当前状态待确认' : '在线 · 最近一次查询结果').fontSize(12).fontColor(MUTED).margin({ bottom: 28 })
         this.detailRow('Tailscale IP', peerAddress(this.view.selectedPeer))
+        Button('复制设备 IPv4').fontColor(BLUE).backgroundColor('#E3EFFF')
+          .onClick(() => { this.model.copyPeerIPv4(); }).margin({ bottom: 20 })
+        Text('请在目标应用中使用 IPv4 和服务端口；本版尚未支持 MagicDNS。')
+          .fontSize(12).fontColor(MUTED).margin({ bottom: 20 })
         this.detailRow('系统', osLabel(this.view.selectedPeer.os || ''))
         this.detailRow('DNS 名称', this.view.selectedPeer.dnsName || '未提供')
         this.detailRow('所属用户', this.view.selectedPeer.userLogin || this.view.selectedPeer.userName || '未提供')
@@ -342,13 +356,95 @@ struct Index {
     }
   }
 
+  @Builder
+  private infoEntry(title: string, subtitle: string, page: string) {
+    Button() {
+      Row({ space: 12 }) {
+        Column({ space: 6 }) {
+          Text(title).fontSize(15).fontColor(INK)
+          Text(subtitle).fontSize(12).fontColor(MUTED)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        this.icon($r('app.media.chevron_right'), 16)
+      }.padding(18).width('100%')
+    }.width('100%').backgroundColor(Color.White).borderRadius(18).margin({ bottom: 12 })
+      .onClick(() => { this.model.openInfoPage(page); })
+  }
+  @Builder
+  private help() {
+    this.sectionHeader('使用与排障')
+    ForEach(HELP_SECTIONS, (section: HelpSection) => {
+      Column({ space: 10 }) {
+        Text(section.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK).width('100%')
+        Text(section.body).fontSize(14).fontColor(MUTED).lineHeight(22).width('100%')
+      }.padding(18).width('100%').backgroundColor(Color.White).borderRadius(18).margin({ bottom: 12 })
+    }, (section: HelpSection) => section.title)
+  }
+  @Builder
+  private about() {
+    this.sectionHeader('关于')
+    Text('harmony-tailscale').fontSize(24).fontWeight(FontWeight.Bold).fontColor(INK)
+    Text(`${this.view.appVersion} · 社区 Alpha`).fontSize(14).fontColor(BLUE).margin({ top: 8, bottom: 16 })
+    Text('非官方社区客户端，与 Tailscale Inc.、华为无隶属或官方背书关系。')
+      .fontSize(14).fontColor(MUTED).lineHeight(22).margin({ bottom: 16 })
+    Button('查看项目源码').width('100%').fontColor(BLUE).onClick(() => { this.model.openProjectLink('source'); })
+    Button('发行与安装说明').width('100%').fontColor(BLUE).onClick(() => { this.model.openProjectLink('releases'); })
+    Button('提交问题反馈').width('100%').fontColor(BLUE).onClick(() => { this.model.openProjectLink('issues'); })
+    Text('隐私与数据').fontSize(18).fontColor(INK).margin({ top: 22, bottom: 12 })
+    Text(PRIVACY_TEXT).fontSize(14).fontColor(MUTED).lineHeight(22).width('100%')
+    Button('查看上游隐私政策').fontColor(BLUE).backgroundColor(Color.Transparent)
+      .onClick(() => { this.model.openProjectLink('privacy'); })
+    Text('项目代码与文档使用 MIT。上游软件保留各自许可；本地声明可离线查看。')
+      .fontSize(13).fontColor(MUTED).lineHeight(22).margin({ top: 16 })
+    Button('开源许可证与第三方声明').width('100%').fontColor(BLUE)
+      .onClick(() => { this.licensePage = 0; this.model.openInfoPage('licenses'); })
+  }
+  @Builder
+  private licenses() {
+    this.sectionHeader('开源许可证')
+    if (this.view.legalLoading) { LoadingProgress().width(32).height(32).color(BLUE) }
+    if (this.view.legalText) {
+      Text(`第 ${this.licensePage + 1} / ${Math.max(1, Math.ceil(this.view.legalText.length / 12000))} 页`)
+        .fontSize(12).fontColor(MUTED)
+      Row({ space: 12 }) {
+        Button('上一页').enabled(this.licensePage > 0).onClick(() => { this.licensePage--; })
+        Button('下一页').enabled((this.licensePage + 1) * 12000 < this.view.legalText.length)
+          .onClick(() => { this.licensePage++; })
+      }.margin({ bottom: 16 })
+      Text(this.view.legalText.slice(this.licensePage * 12000, (this.licensePage + 1) * 12000))
+        .fontFamily('monospace').fontSize(12).fontColor(INK).width('100%')
+        .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+    } else if (!this.view.legalLoading) {
+      Button('重试读取声明').onClick(() => { this.model.loadLicenses(); }).fontColor(BLUE)
+    }
+  }
+  @Builder
+  private feedback() {
+    this.sectionHeader('反馈摘要')
+    Text('以下内容在本机生成，不含账号、IP、登录链接或原始日志。不会自动发送；请核对后复制并补充问题经过。')
+      .fontSize(13).fontColor(MUTED).lineHeight(22).margin({ bottom: 16 })
+    Text(this.view.feedbackText).fontFamily('monospace').fontSize(12).fontColor(INK)
+      .width('100%').padding(16).backgroundColor(Color.White).borderRadius(16)
+      .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+    Button('复制摘要').width('100%').fontColor(BLUE).onClick(() => { this.model.copyFeedbackSummary(); })
+    Button('刷新摘要快照').width('100%').fontColor(BLUE).onClick(() => { this.model.refreshFeedbackSummary(); })
+    Button('打开问题反馈').width('100%').fontColor(BLUE).onClick(() => { this.model.openProjectLink('issues'); })
+  }
+
   build() {
     Stack() {
     Scroll() {
       Column({ space: 8 }) {
+        if (this.view.utilityMessage) {
+          Text(this.view.utilityMessage).fontSize(13).fontColor(INK).width('100%').padding(12)
+            .backgroundColor('#E5F0FF').borderRadius(14)
+        }
         if (this.view.page === 'settings') { this.settings() }
         else if (this.view.page === 'diagnostics') { this.diagnostics() }
         else if (this.view.page === 'detail') { this.detail() }
+        else if (this.view.page === 'about') { this.about() }
+        else if (this.view.page === 'help') { this.help() }
+        else if (this.view.page === 'licenses') { this.licenses() }
+        else if (this.view.page === 'report') { this.feedback() }
         else if (this.view.accountAvailable) { this.dashboard() }
         else { this.welcome() }
       }.width('100%').padding({ left: 24, right: 24, top: 24, bottom: 28 })

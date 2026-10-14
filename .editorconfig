@@ -22,3 +22,7 @@ indent_size = 4
 
 [Makefile]
 indent_style = tab
+
+[{THIRD_PARTY_NOTICES.txt,entry/src/main/resources/rawfile/open-source-notices.txt,third_party/**/NOTICE}]
+trim_trailing_whitespace = false
+insert_final_newline = false

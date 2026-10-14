@@ -9,6 +9,7 @@
 | [测试](testing.md) | 必需检查、证据格式和真机边界 |
 | [设备验收](device-test.md) | 签名、覆盖安装与当前版本验收 |
 | [VPN 范围](vpn-alpha.md) | IPv4 数据路径、资源所有权与限制 |
+| [首发功能与验收](first-release.md) | 最小用户闭环、候选包与实际发布门槛 |
 | [版本规范](versioning.md) | 0.x/预发布、平台升级序号、标签与产物规则 |
 | [发布状态](release-readiness.md) | 当前开发目标的证据与公开发布条件 |
 | [路线图](roadmap.md) | 按优先级安排的后续工作 |

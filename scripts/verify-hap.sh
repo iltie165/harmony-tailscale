@@ -19,21 +19,29 @@ for entry in \
   grep -Fxq "$entry" <<<"$archive" || { echo "missing HAP entry: $entry" >&2; exit 1; }
 done
 
-python3 - "$hap" <<'PY_CHECK'
+python3 - "$hap" "${HARMONY_EXPECT_BUILD_MODE:-}" "$project_root" <<'PY_CHECK'
 import json
 import sys
 import zipfile
+from pathlib import Path
 with zipfile.ZipFile(sys.argv[1]) as archive:
     app = json.loads(archive.read('module.json'))['app']
     assert app['compileSdkType'] == 'HarmonyOS', app
     assert app['minAPIVersion'] % 1000 == 24, app
     assert app['targetAPIVersion'] % 1000 == 26, app
     assert app['bundleName'] == 'com.ezoo.tailscaleprobe', app
+    if sys.argv[2] == 'release':
+        assert app.get('debug') is False, 'release artifact must have app.debug=false'
+    elif sys.argv[2] == 'debug':
+        assert app.get('debug') is True, 'debug artifact must have app.debug=true'
     module = json.loads(archive.read('module.json'))['module']
     assert any(ext['name'] == 'VpnProbeAbility' and ext['type'] == 'vpn' and
                ext.get('exported') is False for ext in module['extensionAbilities']), module
     for name in archive.namelist():
         assert not name.endswith('.node') and 'libtailscale_host' not in name, name
+    notices = [name for name in archive.namelist() if name.endswith('/rawfile/open-source-notices.txt')]
+    assert len(notices) == 1, 'local license resource missing or duplicated'
+    assert archive.read(notices[0]) == (Path(sys.argv[3]) / 'THIRD_PARTY_NOTICES.txt').read_bytes(), 'license bundle differs'
 print('HAP metadata/API/host-artifact exclusion: PASS')
 PY_CHECK
 

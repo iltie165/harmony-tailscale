@@ -49,7 +49,9 @@ make verify-hap # 核对已存在的 HAP 原生内容
 构建同时保留历史 `tailscale-probe-unsigned.hap` 兼容副本；签名默认输出
 对应版本的 `-signed.hap`，不覆盖旧签名包。实际文件名由 VERSION 生成，
 规则见 [版本规范](versioning.md)。
-`make build` 当前明确使用 debug；不能称作 release-mode 构建。
+`make build` 默认使用 debug；`make release-check` 运行全量检查和真正的 release
+构建，并检查 app.debug=false。也可显式设置 `HARMONY_BUILD_MODE=release`。
+产物是否已签名/可安装是独立事实，不由 release mode 推断。
 
 ## 配置
 
@@ -61,6 +63,7 @@ make verify-hap # 核对已存在的 HAP 原生内容
 | `HARMONY_GO_IMAGE` | Go 镜像，默认 `harmonyos-go:1.24` |
 | `HARMONY_DEV_IMAGE` | SDK 镜像，默认 `harmonyos-dev:24.04` |
 | `HARMONY_GOMODCACHE` | 预填充缓存绝对路径，默认项目 `.cache/gomod` |
+| `HARMONY_BUILD_MODE` | debug（默认）或 release；源码构建选择，不更改 SDK |
 | `HARMONY_BUILD_NETWORK` | HAP 构建网络，默认 `none`；只在明确准备环境时改动 |
 | `HARMONY_PROXY_URL` / `HARMONY_ALL_PROXY_URL` | 显式联网准备阶段的代理；离线模式不依赖代理 |
 | `HARMONY_SIGNING_DIR` | 私有签名目录，默认 `$HOME/harmony-signing` |
