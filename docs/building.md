@@ -79,5 +79,6 @@ make verify-hap # 核对已存在的 HAP 原生内容
 - 全量 runner 还需要 `harmonyos` 标签、固定镜像、预填充只读模块缓存
   （默认 `/opt/harmony-ci/gomod`，可用 `HARMONY_CI_MODULE_CACHE` 覆盖）。
 
-这些 workflow 是配置，不表示已部署 runner 或已有远程成功记录。
+基础 CI 已在 e580aaf 运行成功；全量 workflow 实际跳过，不表示可信 runner
+已部署。具体状态见 [复查记录](archive/open-source-readiness-review-2026-10-14.md)。
 签名、设备安装、GitHub Release 发布不由 PR CI 自动执行。

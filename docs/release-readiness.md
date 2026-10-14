@@ -16,7 +16,8 @@
 - 保留 `com.ezoo.tailscaleprobe` 的 bundle identity 与 versionCode 递增，避免已有
   安装、私有账号状态和签名升级链被目录整理破坏。
 - 已有签名包是授权设备的 debug HAP，不是公共发行版。
-- 仓库含 CI 配置；尚未证明可信 runner 已部署或远程全量检查已运行。
+- e580aaf 的 [远程基础 CI](https://github.com/iltie165/harmony-tailscale/actions/runs/38501955041)
+  已成功；全量 HarmonyOS CI 被跳过，可信 runner 的部署/执行仍未验证。
 
 ## 公开发布前的门槛
 
@@ -33,3 +34,5 @@
 [开源准备审查](project-readiness.md) 记录本次结构改动；
 [路线图](roadmap.md) 记录后续顺序。旧的 3.2.0 发布分析保存在
 [历史报告](archive/release-readiness-2026-10-10.md)，不作为当前状态。
+
+后续具体工程问题见 [版本规范化后复查](archive/open-source-readiness-review-2026-10-14.md)。

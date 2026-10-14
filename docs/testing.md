@@ -17,6 +17,7 @@ fail explicitly instead of downloading or asking for HDC.
 
 | Lane | What actually runs | Faults/assertions |
 | --- | --- | --- |
+| Version/metadata | Production version tool + temporary metadata/HAP fixtures | SemVer ordering, invalid inputs, downgrade/code reuse, metadata drift, packaged version/code/bundle mismatch |
 | Go unit + race | Production business code behind injected ports | Login events, order, backend failures, timeout/cancel, independent bounded status snapshot, watcher cleanup, lifecycle and locks, filtering/sorting, JSON, sanitized bounded logs |
 | LocalAPI integration | Pinned `local.Client` + real streaming decoder, local HTTP fake | URL notification, daemon error, malformed stream, timeout, HTTP failure and response close |
 | C ABI integration | Real Linux `c-shared` library loaded with ctypes | Export/version, null/invalid inputs, JSON errors, independent buffers, actual free, concurrent reads |
@@ -57,7 +58,8 @@ inflate it by labeling excluded platform code as tested.
 - `dist/tests/libtailscale_host.so`, `tailscale-{real,mock}.node`: host-only artifacts;
   never package them in a HAP.
 - `dist/tests/hilog-{real,mock}.txt`: host-shim log/privacy evidence, not device HiLog.
-- `dist/hap/tailscale-probe-unsigned.hap`: target compile/packaging artifact.
+- `dist/hap/harmony-tailscale-<VERSION>-arm64-unsigned.hap`: current versioned target artifact;
+  `tailscale-probe-unsigned.hap` is its compatibility copy, not a public release.
 
 The NAPI host test shim is under `tests/host` and is included only by the test
 compiler command; production CMake uses the real HarmonyOS SDK. Mock C ABI

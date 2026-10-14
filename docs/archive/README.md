@@ -12,3 +12,4 @@
 - [Build report](build-report.md)
 - [3.2.0 VPN Alpha 原始报告](vpn-alpha-3.2.0.md)
 - [项目版本规范化 — 2026-10-14](version-normalization-2026-10-14.md)
+- [版本规范化后的开源准备复查](open-source-readiness-review-2026-10-14.md)
