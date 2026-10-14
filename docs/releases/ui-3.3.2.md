@@ -1,5 +1,8 @@
 # 3.3.2 — Bottom safe-area background
 
+> 历史内部测试包记录：本文 2.x/3.x 编号不是正式发行版本。当前版本见
+> [版本规范](../versioning.md)，旧包证据保留原样。
+
 User reports that the top background is correct but a bottom strip remains
 unpainted. The prior layout configured system-bar colors and full-screen layout,
 but did not explicitly extend root rendering into the safe areas or set the

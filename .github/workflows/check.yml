@@ -44,4 +44,4 @@ jobs:
             dist/tests/go-coverage.txt
             dist/tests/coverage-summary.json
             dist/tests/hilog-*.txt
-            dist/hap/tailscale-probe-unsigned.hap
+            dist/hap/harmony-tailscale-*-arm64-unsigned.hap

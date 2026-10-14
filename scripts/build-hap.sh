@@ -8,6 +8,7 @@ proxy=${HARMONY_PROXY_URL:-http://127.0.0.1:7890}
 all_proxy=${HARMONY_ALL_PROXY_URL:-socks5://127.0.0.1:7890}
 native_lib_dir="$project_root/entry/libs/arm64-v8a"
 native_include_dir="$project_root/entry/src/main/cpp/include"
+artifact_name=$(python3 "$project_root/scripts/version.py" artifact unsigned)
 
 "$project_root/scripts/build.sh"
 
@@ -50,6 +51,8 @@ if [[ -z "$hap" ]]; then
 fi
 
 mkdir -p "$project_root/dist/hap"
+cp "$hap" "$project_root/dist/hap/$artifact_name"
+# Retain the unsigned compatibility alias; never overwrite an old signed release.
 cp "$hap" "$project_root/dist/hap/tailscale-probe-unsigned.hap"
-"$project_root/scripts/verify-hap.sh" "$project_root/dist/hap/tailscale-probe-unsigned.hap"
-echo "HAP: $project_root/dist/hap/tailscale-probe-unsigned.hap"
+"$project_root/scripts/verify-hap.sh" "$project_root/dist/hap/$artifact_name"
+echo "HAP: $project_root/dist/hap/$artifact_name"

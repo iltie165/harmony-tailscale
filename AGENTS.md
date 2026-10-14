@@ -44,6 +44,16 @@
 - Keep login URLs, private keys and signing passwords out of source/logs. Login
   URLs are returned only for browser dispatch; all log entrypoints redact them.
 
+## Versioning
+
+- VERSION is the project SemVer source; keep app versionName and both package
+  metadata versions synchronized. Follow docs/versioning.md.
+- Platform versionCode is an independent monotonically increasing upgrade
+  ordinal above legacy 3004001. Never derive it from SemVer or reset it.
+- Preserve upstream Tailscale, Go, C ABI and IPC schema versions independently.
+- Old 2.x/3.x records are internal build history, not public release history.
+  Never relabel an old signed HAP or rewrite a tag to fit a new project version.
+
 ## Required checks
 
 - `make lint`: SDK-free source hygiene and local documentation link checks.

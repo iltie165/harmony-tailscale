@@ -11,3 +11,4 @@
 - [未交付交互修改审查 — 2026-10-12](interaction-review-2026-10-12.md)
 - [Build report](build-report.md)
 - [3.2.0 VPN Alpha 原始报告](vpn-alpha-3.2.0.md)
+- [项目版本规范化 — 2026-10-14](version-normalization-2026-10-14.md)

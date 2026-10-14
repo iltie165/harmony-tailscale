@@ -1,5 +1,8 @@
 # VPN 3.2.1 — ICMP and UI fixes
 
+> 历史内部测试包记录：本文 2.x/3.x 编号不是正式发行版本。当前版本见
+> [版本规范](../versioning.md)，旧包证据保留原样。
+
 2026-10-12. The user confirmed 3.2.0 can stream the home PC with Moonlight
 from another phone app while VPN is ON. This is real application traffic
 evidence, not just a capability probe. They also reported that PC-to-phone

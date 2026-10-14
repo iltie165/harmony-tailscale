@@ -4,9 +4,10 @@
 
 ## 开源与 Alpha 发布
 
+- [x] 统一为 0.1.0-alpha.1，建立 [版本与发布规范](versioning.md)。
 - [x] 选定自有代码/文档 [MIT LICENSE](../LICENSE)。
 - [ ] 审查第三方 notice 与图标来源/再分发许可。
-- [ ] 为当前 3.4.1 补齐真实系统授权、网络切换/锁屏及流量证据。
+- [ ] 为当前预发布 补齐真实系统授权、网络切换/锁屏及流量证据。
 - [ ] 确定公众可安装的签名/分发与保留身份的升级路径。
 - [ ] 固定 SDK 和 OpenHarmony Go 来源、镜像 digest 与缓存准备流程。
 - [ ] 验证 release-mode 构建，发布 tag/commit/checksums/notices/SBOM。

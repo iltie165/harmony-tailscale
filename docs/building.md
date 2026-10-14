@@ -36,6 +36,7 @@ Linux x86-64 主机，Bash、Git、Make、Python 3、Docker Engine。签名还�
 ```bash
 make lint       # 只读源码/文档检查，无需 Docker/SDK
 make doctor     # 检查已存在的镜像、模块缓存和工具，不下载
+make version    # 项目 SemVer + 独立 versionCode
 make test-ui    # 生产 ArkTS 逻辑 + mocked 平台端口；不渲染 ArkUI
 make test       # 全部宿主回归、覆盖率门槛和真实 ABI/NAPI
 make build      # Go ARM64 库 + 未签名 debug HAP + 内容校验
@@ -43,9 +44,11 @@ make check      # 发布/行为变更完整门槛：test + build
 make verify-hap # 核对已存在的 HAP 原生内容
 ```
 
-输出：`dist/libtailscale_ohos.{so,h}`、
-`dist/hap/tailscale-probe-unsigned.hap` 与 `dist/tests/`。
-脚本仍保留历史 `probe` 文件名，避免破坏工具、下载入口和升级流程。
+输出：`dist/libtailscale_ohos.{so,h}`、`dist/tests/` 与版本化的
+`dist/hap/harmony-tailscale-0.1.0-alpha.1-arm64-unsigned.hap`。
+构建同时保留历史 `tailscale-probe-unsigned.hap` 兼容副本；签名默认输出
+对应版本的 `-signed.hap`，不覆盖旧签名包。实际文件名由 VERSION 生成，
+规则见 [版本规范](versioning.md)。
 `make build` 当前明确使用 debug；不能称作 release-mode 构建。
 
 ## 配置

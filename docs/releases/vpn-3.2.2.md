@@ -1,5 +1,8 @@
 # VPN 3.2.2 — persisted account restoration
 
+> 历史内部测试包记录：本文 2.x/3.x 编号不是正式发行版本。当前版本见
+> [版本规范](../versioning.md)，旧包证据保留原样。
+
 2026-10-12. The user reported that reopening a logged-in app shows the login
 page until tapping Login, and that VPN OFF appears to log the account out.
 

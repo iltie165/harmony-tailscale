@@ -7,8 +7,10 @@ signing_dir=${HARMONY_SIGNING_DIR:-$HOME/harmony-signing}
 keystore=${HARMONY_KEYSTORE_FILE:-$signing_dir/debug.p12}
 app_cert=${HARMONY_APP_CERT_FILE:-$signing_dir/lch-phone.cer}
 profile=${HARMONY_PROFILE_FILE:-$signing_dir/tailscala-hos-debug.p7b}
-unsigned_hap=${1:-$project_root/dist/hap/tailscale-probe-unsigned.hap}
-signed_hap=${2:-$project_root/dist/hap/tailscale-probe-signed.hap}
+unsigned_name=$(python3 "$project_root/scripts/version.py" artifact unsigned)
+signed_name=$(python3 "$project_root/scripts/version.py" artifact signed)
+unsigned_hap=${1:-$project_root/dist/hap/$unsigned_name}
+signed_hap=${2:-$project_root/dist/hap/$signed_name}
 bundle_name=com.ezoo.tailscaleprobe
 compatible_api=${HARMONY_COMPATIBLE_API:-24}
 
@@ -22,6 +24,7 @@ for required in "$keystore" "$app_cert" "$profile" "$unsigned_hap"; do
     exit 1
   fi
 done
+python3 "$project_root/scripts/version.py" check --hap "$unsigned_hap"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT

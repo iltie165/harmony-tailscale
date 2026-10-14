@@ -1,7 +1,8 @@
 # HarmonyOS 设备安装与验收
 
-当前源码版本为 **3.4.1 Alpha**。已有 debug profile 可能只授权指定设备，
-覆盖安装要求兼容 bundle/签名且 versionCode 不降级；不要承诺所有手机可安装。
+当前源码版本为 **0.1.0-alpha.1**（开发目标，尚未公开发行）。已有 debug profile 可能只授权指定设备，
+覆盖安装要求兼容 bundle/签名且 versionCode 不降级；本次序号为 3004002，
+高于旧内部包 3004001。不要承诺所有手机可安装；改号后的覆盖安装仍待真机验收。
 
 ## 签名
 
@@ -18,7 +19,7 @@ read -rsp 'P12 password: ' HARMONY_KEYSTORE_PASSWORD
 echo
 export HARMONY_KEYSTORE_PASSWORD
 # 仅在私钥密码不同时设置 HARMONY_KEY_PASSWORD。
-./scripts/sign-hap.sh dist/hap/tailscale-probe-unsigned.hap dist/hap/tailscale-probe-3.4.1-signed.hap
+./scripts/sign-hap.sh dist/hap/harmony-tailscale-0.1.0-alpha.1-arm64-unsigned.hap dist/hap/harmony-tailscale-0.1.0-alpha.1-arm64-signed.hap
 unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
 ```
 
@@ -30,7 +31,7 @@ unset HARMONY_KEYSTORE_PASSWORD HARMONY_KEY_PASSWORD
 确认目标。先在 APP 关闭 VPN，保留原包供回退；覆盖安装，**不要先卸载**。
 
 ```bash
-hdc install -r dist/hap/tailscale-probe-3.4.1-signed.hap
+hdc install -r dist/hap/harmony-tailscale-0.1.0-alpha.1-arm64-signed.hap
 hdc shell aa start -a EntryAbility -b com.ezoo.tailscaleprobe
 ```
 
@@ -51,7 +52,8 @@ hdc shell aa start -a EntryAbility -b com.ezoo.tailscaleprobe
 7. 小屏/大字号/长名字/系统安全区及辅助功能检查；保存脱敏截图与日志。
 
 记录包 SHA-256、commit、系统/API/型号、日期、用例及结果。
-[3.4.1 记录](releases/ui-3.4.1.md) 和 [VPN 边界](vpn-alpha.md) 是验收依据。
+[版本规范](versioning.md) 和 [VPN 边界](vpn-alpha.md) 是验收依据；
+[旧 3.4.1 内部记录](releases/ui-3.4.1.md) 只提供功能基线证据，不代表新版已安装。
 宿主 Node 测试不是 ArkUI 渲染；目标构建/验签不是手机联网结果。
 
 早期 probe 操作与限制可查 [构建历史](archive/build-report.md)。

@@ -3,13 +3,15 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_DEV_IMAGE:-harmonyos-dev:24.04}
-hap=${1:-"$project_root/dist/hap/tailscale-probe-signed.hap"}
+signed_name=$(python3 "$project_root/scripts/version.py" artifact signed)
+hap=${1:-"$project_root/dist/hap/$signed_name"}
 
 if [[ ! -f "$hap" ]]; then
   echo "missing signed HAP: $hap" >&2
   echo "Pass a signed HAP as the first argument." >&2
   exit 1
 fi
+python3 "$project_root/scripts/version.py" check --hap "$hap"
 
 mkdir -p "$project_root/dist/device-logs"
 

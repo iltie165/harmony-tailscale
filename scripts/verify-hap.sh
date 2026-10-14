@@ -3,9 +3,11 @@ set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=${HARMONY_DEV_IMAGE:-harmonyos-dev:24.04}
-hap=${1:-"$project_root/dist/hap/tailscale-probe-unsigned.hap"}
+unsigned_name=$(python3 "$project_root/scripts/version.py" artifact unsigned)
+hap=${1:-"$project_root/dist/hap/$unsigned_name"}
 
 [[ -f "$hap" ]] || { echo "missing HAP: $hap" >&2; exit 1; }
+python3 "$project_root/scripts/version.py" check --hap "$hap"
 
 archive=$(unzip -Z1 "$hap")
 for entry in \

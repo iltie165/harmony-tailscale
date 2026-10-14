@@ -1,5 +1,8 @@
 # 3.3.4 — Supplied icon and local startup readiness
 
+> 历史内部测试包记录：本文 2.x/3.x 编号不是正式发行版本。当前版本见
+> [版本规范](../versioning.md)，旧包证据保留原样。
+
 ## Icon
 
 The supplied square PNG is copied unchanged to AppScope and entry media

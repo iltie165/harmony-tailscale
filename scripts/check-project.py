@@ -31,8 +31,8 @@ def check() -> None:
                 failures.append(f'{document.relative_to(ROOT)}: missing/local-escape link {link}')
 
     required = (
-        'README.md', 'LICENSE', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SECURITY.md', 'SUPPORT.md',
-        'THIRD_PARTY.md', 'docs/README.md', 'docs/building.md', 'docs/project-readiness.md',
+        'README.md', 'LICENSE', 'VERSION', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SECURITY.md', 'SUPPORT.md',
+        'THIRD_PARTY.md', 'docs/README.md', 'docs/building.md', 'docs/versioning.md', 'docs/project-readiness.md',
         'docs/releases/README.md', 'docs/archive/README.md',
         '.github/pull_request_template.md', '.github/ISSUE_TEMPLATE/bug_report.yml',
         '.github/ISSUE_TEMPLATE/feature_request.yml', '.github/workflows/source.yml',

@@ -57,6 +57,12 @@ text where a meaningful behavior test is possible.
 
 ## Releases and licensing
 
+Read the [version policy](docs/versioning.md). VERSION is the project SemVer
+source; HarmonyOS versionCode is a separate increasing upgrade ordinal. Prepare
+version changes with `scripts/version.py set`; never rename an old signed binary
+as a new release or rewrite a published tag. Current 0.1.0-alpha.1 is a development
+target, not an existing public release.
+
 Signing and publication are independent of PR checks. Preserve the last known
 signed artifact, record source commit/version/checksums, and distinguish host
 from target/device evidence. See [release checklist](docs/release-readiness.md).

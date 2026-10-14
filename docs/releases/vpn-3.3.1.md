@@ -1,5 +1,8 @@
 # 3.3.1 — VPN recovery loop Alpha
 
+> 历史内部测试包记录：本文 2.x/3.x 编号不是正式发行版本。当前版本见
+> [版本规范](../versioning.md)，旧包证据保留原样。
+
 ## Implemented behavior
 
 The user-requested recovery loop is implemented without changing the pinned

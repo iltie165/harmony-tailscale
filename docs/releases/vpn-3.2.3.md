@@ -1,5 +1,8 @@
 # VPN 3.2.3 — live readiness before handoff
 
+> 历史内部测试包记录：本文 2.x/3.x 编号不是正式发行版本。当前版本见
+> [版本规范](../versioning.md)，旧包证据保留原样。
+
 2026-10-12. A device user reported ON fails with the 3.2.2 saved-account
 reconnecting guard. They also questioned why each VPN toggle starts a core.
 

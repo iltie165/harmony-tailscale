@@ -3,8 +3,9 @@
 非官方的 HarmonyOS ARM64 Tailscale 客户端，基于官方 Go 核心、ArkUI 与
 系统 VPN 扩展。与 Tailscale Inc.、华为无隶属或官方背书关系。
 
-**当前版本：3.4.1 · Alpha**。源码、测试和目标构建已有验证；3.4.1 的首次
-系统授权、界面及网络切换效果仍待真机验收。现有签名包是设备受限的调试包，
+**开发版本：0.1.0-alpha.1 · 尚未公开发行**。采用 [SemVer 版本规范](docs/versioning.md)。
+功能基线已有内部测试证据；当前首次系统授权、界面及网络切换效果仍待真机验收。
+现有签名包是设备受限的调试包，
 不是可供所有手机安装的正式发行版。详见 [发布状态](docs/release-readiness.md)。
 
 ## 功能与边界
@@ -18,7 +19,7 @@
   服务端、Taildrive、策略组管理。后台/锁屏行为不承诺稳定。
 
 历史真机反馈包含 3.0.6 登录/设备查询与 3.2.0 Moonlight 使用；不能把这些
-证据当作 3.4.1 已完成真机验证。
+证据当作当前预发布已完成真机验证。
 
 ## 快速开始
 
@@ -31,6 +32,7 @@ git clone https://github.com/iltie165/harmony-tailscale.git
 cd harmony-tailscale
 make lint       # 文档链接、目录、脚本语法及源文件规范；无需 SDK
 make doctor     # 只读检查本机工具链/镜像/缓存
+make version    # 显示统一项目版本与平台升级序号
 make test       # 离线 Go race/vet、C ABI/NAPI 与 UI 回归
 make check      # 上述检查 + ARM64/ArkTS 编译及 HAP 内容核对
 ```
@@ -42,6 +44,7 @@ make check      # 上述检查 + ARM64/ArkTS 编译及 HAP 内容核对
 
 ```text
 .
+├── VERSION                    # 项目语义版本唯一来源
 ├── AppScope/                  # HarmonyOS 应用身份、版本和全局资源
 ├── entry/                     # 标准 Stage 模块（保留 SDK 约定）
 │   └── src/main/
@@ -69,7 +72,7 @@ Go `core/` 是 `c-shared` 的 main 包，不为目录美观拆成重复状态所
 
 - [文档导航](docs/README.md) · [架构与契约](docs/architecture.md)
 - [贡献指南](CONTRIBUTING.md) · [测试边界](docs/testing.md)
-- [更新记录](CHANGELOG.md) · [后续计划](docs/roadmap.md)
+- [更新记录](CHANGELOG.md) · [版本与发布规范](docs/versioning.md) · [后续计划](docs/roadmap.md)
 - [问题与支持](SUPPORT.md) · [安全报告](SECURITY.md)
 - [第三方说明](THIRD_PARTY.md) · [开源准备审查](docs/project-readiness.md)
 
